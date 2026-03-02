@@ -1,0 +1,17 @@
+1. Add both files to your project
+
+planning.js → src/planning.js
+planning.test.js → src/planning.test.js
+
+2. Update App.jsx imports
+Replace the inline function definitions with imports at the top:
+jsimport { isBizDay, bizDaysBetween, addBizDaysFrom, nextBizDay,
+         parseDate, fmtDate, calcSoloBuildDate, runPlan } from "./planning.js";
+3. Add Vitest to your project
+bashnpm install -D vitest
+4. Add a test script to package.json
+json"test": "vitest"
+5. Run the tests
+bashnpm test
+
+The test suite covers 20 scenarios across all the key functions — weekend/holiday skipping, mid-sprint trim, build date accuracy, priority ordering, pool overflow, and the "new epic displaces existing ones" ripple effect. Each test has a comment explaining the arithmetic so you can verify the expected values by hand.
