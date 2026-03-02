@@ -1,16 +1,63 @@
-# React + Vite
+# SPRINTPLAN Resource Engine
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A React-based sprint planning tool for calculating development and test delivery timelines based on team velocity and epic data.
 
-Currently, two official plugins are available:
+## What it does
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Takes a **team roster** with individual daily SP velocity
+- Takes a list of **epics** with story points and analysis due dates
+- Calculates per-epic:
+  - **Solo Dev Due Date** — how long one average dev would take with no contention
+  - **Planned Dev Due Date** — realistic date accounting for team parallelism and sprint capacity
+  - **Test Due Date** — 4 weeks after planned dev completion
+- Excludes Canadian federal bank holidays and weekends from all calculations
+- Supports mixed date input formats (YYYY-MM-DD, M/D/YYYY, D-Mon, etc.)
 
-## React Compiler
+## Views
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+| Tab | Description |
+|-----|-------------|
+| Epic Input | Paste or edit epics, see calculated dates inline |
+| Demand Table | Sprint-by-sprint dev demand vs capacity |
+| Utilisation Chart | Visual bar chart of team utilisation per sprint |
+| Epic Breakdown | Collapsible per-sprint epic allocation detail |
+| Gantt | Timeline view of epic scheduling across sprints |
 
-## Expanding the ESLint configuration
+## Stack
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- React 19
+- Vite 8
+- Vitest (unit tests)
+- No external UI libraries
+
+## Getting started
+```bash
+npm install
+npm run dev
+```
+
+## Running tests
+```bash
+npm test
+```
+
+## Input format
+
+**Team velocity** — paste TSV from Excel:
+```
+Name    Role    Location    Velocity
+Alice   Dev     Canada      0.475
+Bob     Dev     Canada      0.226
+```
+
+**Epics** — paste TSV from Excel (Name · SP · Analysis Due):
+```
+BMO-1234    12    3/27/2026
+BMO-5678    5     2026-04-15
+```
+
+## Notes
+
+- Holidays covered: 2025–2027 Canadian federal bank holidays
+- Planning logic uses greedy parallel packing — epics are sorted by analysis due date, then allocated across the team dev-day pool sprint by sprint
+- Adding new epics with earlier analysis dates may shift existing planned dates
