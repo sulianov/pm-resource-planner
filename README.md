@@ -1,4 +1,4 @@
-# SPRINTPLAN Resource Engine
+# sprint-planner
 
 A React-based sprint planning tool for calculating development and test delivery timelines based on team velocity and epic data.
 
