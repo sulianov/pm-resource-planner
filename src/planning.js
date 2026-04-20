@@ -197,3 +197,29 @@ export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDat
 
   return { sprintStats, assignedEpics: assigned, sprints };
 }
+
+/**
+ * Per-story dev/test due dates for a single developer.
+ * overrideSP replaces story.sp when provided (proportional redistribution).
+ * story.analysisDue must already be a Date object.
+ */
+export function calcStoryDates(story, perDevVelocityPerDay, overrideSP) {
+  const start = story.analysisDue; // Date | null
+  const sp    = overrideSP !== undefined ? overrideSP : (parseFloat(story.sp) || 0);
+  if (!start || sp <= 0 || perDevVelocityPerDay <= 0) return { devDue: null, testDue: null };
+  const devDue  = addBizDaysFrom(start, Math.ceil(sp / perDevVelocityPerDay));
+  const testDue = addBizDaysFrom(devDue, 20);
+  return { devDue, testDue };
+}
+
+/**
+ * Full-focus date: all teamSize devs swarm a single epic immediately after
+ * analysis due. Theoretical lower bound — ignores contention.
+ * ep.analysisDue may be a Date or "YYYY-MM-DD" string.
+ */
+export function calcFullFocusDate(ep, perDevVelocityPerDay, teamSize) {
+  const sp    = parseFloat(ep.sp) || 0;
+  const start = ep.analysisDue instanceof Date ? ep.analysisDue : parseDate(ep.analysisDue);
+  if (!start || sp <= 0 || perDevVelocityPerDay <= 0 || teamSize <= 0) return null;
+  return addBizDaysFrom(start, Math.ceil(sp / (perDevVelocityPerDay * teamSize)));
+}

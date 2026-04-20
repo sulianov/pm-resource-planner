@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import {
-  parseDate, fmtDate, calcSoloBuildDate, runPlan, addBizDaysFrom
+  parseDate, fmtDate, calcSoloBuildDate, runPlan, addBizDaysFrom,
+  calcStoryDates, calcFullFocusDate,
 } from "./planning.js";
 import { fetchStoriesPaginated, fetchIssuesByKeys, updateIssue } from "./jiraService.js";
 import { groupStoriesByEpic, STORY_FIELDS, F_SP, F_DEV_DUE, F_TEST_DUE } from "./epicGrouping.js";
@@ -45,25 +46,6 @@ function btnStyle(col, disabled = false) {
     cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit", textTransform: "uppercase",
     opacity: disabled ? 0.6 : 1, transition: "all 0.15s",
   };
-}
-
-// Per-story dev/test due. overrideSP replaces story.sp when provided (proportional redistribution).
-function calcStoryDates(story, perDevVelocityPerDay, overrideSP) {
-  const start = story.analysisDue; // Date | null
-  const sp    = overrideSP !== undefined ? overrideSP : (parseFloat(story.sp) || 0);
-  if (!start || sp <= 0 || perDevVelocityPerDay <= 0) return { devDue: null, testDue: null };
-  const devDue  = addBizDaysFrom(start, Math.ceil(sp / perDevVelocityPerDay));
-  const testDue = addBizDaysFrom(devDue, 20);
-  return { devDue, testDue };
-}
-
-// Full-focus date: all teamSize devs swarm a single epic immediately after analysis due.
-// Ignores contention — theoretical lower bound.
-function calcFullFocusDate(ep, perDevVelocityPerDay, teamSize) {
-  const sp    = parseFloat(ep.sp) || 0;
-  const start = ep.analysisDue instanceof Date ? ep.analysisDue : parseDate(ep.analysisDue);
-  if (!start || sp <= 0 || perDevVelocityPerDay <= 0 || teamSize <= 0) return null;
-  return addBizDaysFrom(start, Math.ceil(sp / (perDevVelocityPerDay * teamSize)));
 }
 
 function TabBar({ tabs, active, onChange }) {

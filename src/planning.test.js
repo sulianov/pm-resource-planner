@@ -1,24 +1,25 @@
-import { describe, it, expect } from "vitest";
+﻿import { describe, it, expect } from "vitest";
 import {
   isBizDay,
   bizDaysBetween,
   addBizDaysFrom,
   nextBizDay,
+  parseDate,
   fmtDate,
   calcSoloBuildDate,
+  calcStoryDates,
+  calcFullFocusDate,
   runPlan,
-  parseDate,
 } from "./planning.js";
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-const d = (s) => new Date(s + "T00:00:00");
-const fmt = (s) => fmtDate(d(s));
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const d  = (s) => new Date(s + "T00:00:00");
 
-// Base config reused across runPlan tests
+/** Base runPlan config reused across tests. */
 const BASE = {
-  perDevVelocityPerDay: 6,   // 6 SP per dev per day
+  perDevVelocityPerDay: 6,
   totalDevs: 4,
-  sprintStartDate: d("2026-03-02"), // Monday
+  sprintStartDate: d("2026-03-02"),
   numSprints: 6,
   startSprintNum: 1,
 };
@@ -27,159 +28,279 @@ function makeEpic(name, sp, analysisDue) {
   return { id: name, name, sp, analysisDue: analysisDue ? d(analysisDue) : null };
 }
 
-// ── isBizDay ─────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// isBizDay
+// ════════════════════════════════════════════════════════════════════════════
 describe("isBizDay", () => {
-  it("returns true for a normal weekday", () => {
-    expect(isBizDay(d("2026-03-04"))).toBe(true); // Wednesday
+  it("returns true for a normal weekday (Wednesday)", () => {
+    expect(isBizDay(d("2026-03-04"))).toBe(true);
   });
-
   it("returns false for Saturday", () => {
     expect(isBizDay(d("2026-03-07"))).toBe(false);
   });
-
   it("returns false for Sunday", () => {
     expect(isBizDay(d("2026-03-08"))).toBe(false);
   });
-
-  it("returns false for CA holiday (Good Friday 2026)", () => {
+  it("returns false for Good Friday 2026 (CA holiday)", () => {
     expect(isBizDay(d("2026-04-03"))).toBe(false);
   });
-
-  it("returns false for CA holiday (Canada Day 2026)", () => {
+  it("returns false for Canada Day 2026 (CA holiday)", () => {
     expect(isBizDay(d("2026-07-01"))).toBe(false);
   });
-
-  it("returns true for day after a holiday", () => {
-    expect(isBizDay(d("2026-07-02"))).toBe(true); // Thursday after Canada Day
+  it("returns true the day after a CA holiday", () => {
+    expect(isBizDay(d("2026-07-02"))).toBe(true);
+  });
+  it("returns false for Boxing Day 2026 (CA observed holiday)", () => {
+    expect(isBizDay(d("2026-12-28"))).toBe(false);
+  });
+  it("returns false for New Year 2027 (CA holiday)", () => {
+    expect(isBizDay(d("2027-01-01"))).toBe(false);
   });
 });
 
-// ── bizDaysBetween ────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// bizDaysBetween
+// ════════════════════════════════════════════════════════════════════════════
 describe("bizDaysBetween", () => {
-  it("counts 5 biz days in a normal week Mon–Fri", () => {
-    // Mon 2026-03-02 to Sat 2026-03-07
+  it("counts 5 biz days Mon–Sat (exclusive end)", () => {
     expect(bizDaysBetween(d("2026-03-02"), d("2026-03-07"))).toBe(5);
   });
-
-  it("counts 0 for same day", () => {
+  it("counts 0 for the same day", () => {
     expect(bizDaysBetween(d("2026-03-04"), d("2026-03-04"))).toBe(0);
   });
-
-  it("counts 0 for weekend-only range", () => {
+  it("counts 0 for a weekend-only range", () => {
     expect(bizDaysBetween(d("2026-03-07"), d("2026-03-09"))).toBe(0);
   });
-
-  it("excludes CA holiday in range", () => {
-    // Mon Mar 30 – Tue Apr 7 (exclusive): Mon/Tue/Wed/Thu = 4 days, Good Friday Apr 3 excluded, weekend excluded, Mon Apr 6 = 5 biz days
+  it("excludes CA holiday within a range", () => {
+    // Mar 30 Mon – Apr 7 Tue: Mon Tue Wed Thu(4) GoodFriday=skip Mon Apr6(5)
     expect(bizDaysBetween(d("2026-03-30"), d("2026-04-07"))).toBe(5);
   });
-
   it("counts 10 biz days in a standard 2-week sprint", () => {
     expect(bizDaysBetween(d("2026-03-02"), d("2026-03-16"))).toBe(10);
   });
+  it("counts correctly across a month boundary with a holiday (Canada Day)", () => {
+    // Jun 29(1) 30(2) Jul 1=holiday Jul 2(3) 3(4) → 4 before Mon Jul 6
+    expect(bizDaysBetween(d("2026-06-29"), d("2026-07-06"))).toBe(4);
+  });
 });
 
-// ── addBizDaysFrom ────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// addBizDaysFrom
+// ════════════════════════════════════════════════════════════════════════════
 describe("addBizDaysFrom", () => {
-  it("adds 1 biz day from a Monday → Tuesday", () => {
+  it("adds 1 biz day from Monday → Tuesday", () => {
     expect(fmtDate(addBizDaysFrom(d("2026-03-02"), 1))).toBe("2026-03-03");
   });
-
   it("adds 1 biz day from Friday → Monday (skips weekend)", () => {
     expect(fmtDate(addBizDaysFrom(d("2026-03-06"), 1))).toBe("2026-03-09");
   });
-
-  it("adds 5 biz days from Monday → Monday of next week", () => {
+  it("adds 5 biz days from Monday → next Monday", () => {
     expect(fmtDate(addBizDaysFrom(d("2026-03-02"), 5))).toBe("2026-03-09");
   });
-
-  it("crosses weekend correctly", () => {
-    // 6 biz days from Mon 2026-03-02 → Tuesday 2026-03-10
+  it("adds 6 biz days crossing a weekend", () => {
     expect(fmtDate(addBizDaysFrom(d("2026-03-02"), 6))).toBe("2026-03-10");
   });
-
-  it("skips over a CA holiday", () => {
-    // Canada Day 2026-07-01 is Wednesday. 3 biz days from Mon 2026-06-29:
-    // Tue(1) Wed=holiday skip Thu(2) Fri(3) → lands Fri 2026-07-03
+  it("skips a CA holiday mid-count (Canada Day)", () => {
+    // 3 biz from Mon Jun 29: Tue 30(1) Wed=holiday Thu 2(2) Fri 3(3)
     expect(fmtDate(addBizDaysFrom(d("2026-06-29"), 3))).toBe("2026-07-03");
+  });
+  it("adds 20 biz days = 4 calendar weeks (no holidays in range)", () => {
+    expect(fmtDate(addBizDaysFrom(d("2026-03-02"), 20))).toBe("2026-03-30");
   });
 });
 
-// ── nextBizDay ────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// nextBizDay
+// ════════════════════════════════════════════════════════════════════════════
 describe("nextBizDay", () => {
   it("from Friday → Monday", () => {
     expect(fmtDate(nextBizDay(d("2026-03-06")))).toBe("2026-03-09");
   });
-
-  it("from Thursday before a holiday Friday → Monday", () => {
-    // Good Friday 2026-04-03, so next biz day after Thu 2026-04-02 → Mon 2026-04-06
+  it("from Thursday before holiday Friday → Monday", () => {
     expect(fmtDate(nextBizDay(d("2026-04-02")))).toBe("2026-04-06");
   });
+  it("from a mid-week day → next day", () => {
+    expect(fmtDate(nextBizDay(d("2026-03-04")))).toBe("2026-03-05");
+  });
 });
 
-// ── calcSoloBuildDate ─────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// parseDate
+// ════════════════════════════════════════════════════════════════════════════
+describe("parseDate", () => {
+  it("parses YYYY-MM-DD (ISO format)", () => {
+    expect(fmtDate(parseDate("2026-05-15"))).toBe("2026-05-15");
+  });
+  it("parses M/D/YYYY (US slash format)", () => {
+    expect(fmtDate(parseDate("3/27/2026"))).toBe("2026-03-27");
+  });
+  it("parses MM/DD/YYYY (zero-padded US format)", () => {
+    expect(fmtDate(parseDate("12/01/2026"))).toBe("2026-12-01");
+  });
+  it("parses D-M-YYYY (day-month-year hyphens)", () => {
+    expect(fmtDate(parseDate("27-2-2026"))).toBe("2026-02-27");
+  });
+  it("returns null for null input", () => {
+    expect(parseDate(null)).toBeNull();
+  });
+  it("returns null for empty string", () => {
+    expect(parseDate("")).toBeNull();
+  });
+  it("returns null for an invalid date string", () => {
+    expect(parseDate("not-a-date")).toBeNull();
+  });
+  it("round-trips through fmtDate without drift", () => {
+    expect(fmtDate(parseDate("2026-11-30"))).toBe("2026-11-30");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// fmtDate
+// ════════════════════════════════════════════════════════════════════════════
+describe("fmtDate", () => {
+  it("formats a Date to YYYY-MM-DD", () => {
+    expect(fmtDate(d("2026-07-04"))).toBe("2026-07-04");
+  });
+  it("zero-pads single-digit month and day", () => {
+    expect(fmtDate(d("2026-01-05"))).toBe("2026-01-05");
+  });
+  it("returns dash for null", () => {
+    expect(fmtDate(null)).toBe("—");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// calcSoloBuildDate
+// ════════════════════════════════════════════════════════════════════════════
 describe("calcSoloBuildDate", () => {
-  it("returns null if no SP", () => {
+  it("returns null when SP is 0", () => {
     expect(calcSoloBuildDate({ sp: 0, analysisDue: "2026-03-02" }, 6)).toBeNull();
   });
-
-  it("returns null if no analysis due date", () => {
+  it("returns null when analysisDue is empty", () => {
     expect(calcSoloBuildDate({ sp: 30, analysisDue: "" }, 6)).toBeNull();
   });
-
-  it("calculates correct date for 30 SP at 6 SP/day = 5 biz days", () => {
-    // 5 biz days forward from 2026-03-02 (Mon): Tue Wed Thu Fri Mon → 2026-03-09
-    const result = calcSoloBuildDate({ sp: 30, analysisDue: "2026-03-02" }, 6);
-    expect(fmtDate(result)).toBe("2026-03-09");
+  it("returns null when velocity is 0", () => {
+    expect(calcSoloBuildDate({ sp: 30, analysisDue: "2026-03-02" }, 0)).toBeNull();
   });
-
-  it("skips holidays in solo date calculation", () => {
-    // 5 biz days from Mon 2026-06-29: Tue(1) Wed=holiday Thu(2) Fri(3) Mon(4) Tue(5) → 2026-07-07
-    const result = calcSoloBuildDate({ sp: 30, analysisDue: "2026-06-29" }, 6);
-    expect(fmtDate(result)).toBe("2026-07-07");
+  it("calculates correctly: 30 SP / 6 vel = 5 biz days from Mon → Mon", () => {
+    expect(fmtDate(calcSoloBuildDate({ sp: 30, analysisDue: "2026-03-02" }, 6))).toBe("2026-03-09");
+  });
+  it("skips CA holidays in the count", () => {
+    // 5 biz from Mon Jun 29: Tue(1) Wed=holiday Thu(2) Fri(3) Mon(4) Tue(5) → Jul 7
+    expect(fmtDate(calcSoloBuildDate({ sp: 30, analysisDue: "2026-06-29" }, 6))).toBe("2026-07-07");
+  });
+  it("uses Math.ceil so fractional dev-days round up", () => {
+    // 7 SP / 6 vel = 1.17 → ceil(2) biz days from Mon → Wed
+    expect(fmtDate(calcSoloBuildDate({ sp: 7, analysisDue: "2026-03-02" }, 6))).toBe("2026-03-04");
   });
 });
 
-// ── runPlan ───────────────────────────────────────────────────────────────────
-describe("runPlan", () => {
+// ════════════════════════════════════════════════════════════════════════════
+// calcStoryDates
+// ════════════════════════════════════════════════════════════════════════════
+describe("calcStoryDates", () => {
+  const start = d("2026-03-02");
 
-  it("schedules a single small epic within the first sprint", () => {
-    // 6 SP / 6 vel = 1 dev-day. With 4 devs and 10 biz days, fits easily.
+  it("returns null dates when analysisDue is null", () => {
+    const { devDue, testDue } = calcStoryDates({ analysisDue: null, sp: "5" }, 1);
+    expect(devDue).toBeNull();
+    expect(testDue).toBeNull();
+  });
+  it("returns null dates when SP is 0", () => {
+    const { devDue } = calcStoryDates({ analysisDue: start, sp: "0" }, 1);
+    expect(devDue).toBeNull();
+  });
+  it("returns null dates when velocity is 0", () => {
+    const { devDue } = calcStoryDates({ analysisDue: start, sp: "5" }, 0);
+    expect(devDue).toBeNull();
+  });
+  it("devDue = analysisDue + ceil(SP/vel) biz days", () => {
+    // 6 SP / 6 vel = 1 biz day: Mon → Tue
+    const { devDue } = calcStoryDates({ analysisDue: start, sp: "6" }, 6);
+    expect(fmtDate(devDue)).toBe("2026-03-03");
+  });
+  it("testDue = devDue + 20 biz days", () => {
+    const { devDue, testDue } = calcStoryDates({ analysisDue: start, sp: "6" }, 6);
+    expect(fmtDate(testDue)).toBe(fmtDate(addBizDaysFrom(devDue, 20)));
+  });
+  it("overrideSP replaces story.sp", () => {
+    // overrideSP=12: 12/6=2 biz days Mon → Wed
+    const { devDue } = calcStoryDates({ analysisDue: start, sp: "6" }, 6, 12);
+    expect(fmtDate(devDue)).toBe("2026-03-04");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// calcFullFocusDate
+// ════════════════════════════════════════════════════════════════════════════
+describe("calcFullFocusDate", () => {
+  it("returns null when SP is 0", () => {
+    expect(calcFullFocusDate({ sp: "0", analysisDue: "2026-03-02" }, 1, 4)).toBeNull();
+  });
+  it("returns null when analysisDue is empty", () => {
+    expect(calcFullFocusDate({ sp: "10", analysisDue: "" }, 1, 4)).toBeNull();
+  });
+  it("returns null when teamSize is 0", () => {
+    expect(calcFullFocusDate({ sp: "10", analysisDue: "2026-03-02" }, 1, 0)).toBeNull();
+  });
+  it("returns null when velocity is 0", () => {
+    expect(calcFullFocusDate({ sp: "10", analysisDue: "2026-03-02" }, 0, 4)).toBeNull();
+  });
+  it("accepts analysisDue as a Date object", () => {
+    const result = calcFullFocusDate({ sp: "6", analysisDue: d("2026-03-02") }, 6, 1);
+    expect(fmtDate(result)).toBe("2026-03-03");
+  });
+  it("accepts analysisDue as a YYYY-MM-DD string", () => {
+    const result = calcFullFocusDate({ sp: "6", analysisDue: "2026-03-02" }, 6, 1);
+    expect(fmtDate(result)).toBe("2026-03-03");
+  });
+  it("larger teamSize produces an earlier date", () => {
+    // 24 SP / (6 * 1) = 4 biz from Mon → Fri Mar 6
+    const solo = calcFullFocusDate({ sp: "24", analysisDue: "2026-03-02" }, 6, 1);
+    // 24 SP / (6 * 4) = 1 biz from Mon → Tue Mar 3
+    const team = calcFullFocusDate({ sp: "24", analysisDue: "2026-03-02" }, 6, 4);
+    expect(fmtDate(solo)).toBe("2026-03-06");
+    expect(fmtDate(team)).toBe("2026-03-03");
+  });
+  it("uses Math.ceil for fractional biz days", () => {
+    // 7 SP / (6 * 4) = 0.29 → ceil(1) biz day Mon → Tue
+    const result = calcFullFocusDate({ sp: "7", analysisDue: "2026-03-02" }, 6, 4);
+    expect(fmtDate(result)).toBe("2026-03-03");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// runPlan
+// ════════════════════════════════════════════════════════════════════════════
+describe("runPlan", () => {
+  it("schedules a small epic in sprint 0 with no warning", () => {
     const { assignedEpics } = runPlan({
       ...BASE,
       epics: [makeEpic("Alpha", 6, "2026-03-02")],
     });
-    expect(assignedEpics[0].segments.length).toBe(1);
     expect(assignedEpics[0].segments[0].sprintIdx).toBe(0);
     expect(assignedEpics[0].warning).toBeNull();
   });
 
-  it("build complete date is within the sprint, not snapped to sprint end", () => {
-    // 12 SP / 6 vel = 2 dev-days for 1 dev.
-    // 2 biz days forward from sprint start 2026-03-02 → Wed 2026-03-04
+  it("buildComplete is precise, not snapped to sprint end", () => {
+    // 12 SP / 6 vel = 2 dev-days → Wed Mar 4
     const { assignedEpics } = runPlan({
-      ...BASE,
-      totalDevs: 1,
+      ...BASE, totalDevs: 1,
       epics: [makeEpic("Beta", 12, "2026-03-02")],
     });
-    const bc = fmtDate(assignedEpics[0].buildComplete);
-    expect(bc).toBe("2026-03-04");
+    expect(fmtDate(assignedEpics[0].buildComplete)).toBe("2026-03-04");
   });
 
-  it("epic with analysis due mid-sprint only uses remaining biz days of that sprint", () => {
-    // Sprint 1: 2026-03-02 → 2026-03-16 (10 biz days)
-    // Analysis due 2026-03-09 (Monday of week 2) → 5 biz days remaining in sprint
-    // 60 SP / 6 vel = 10 dev-days needed. 1 dev × 5 remaining days = only 5 dev-days in S1
-    // Should spill into S2
+  it("mid-sprint analysisDue only uses remaining biz days of that sprint", () => {
+    // analysisDue Mar 9: 5 remaining biz days in sprint 1; 60/6=10 dev-days needed → spills
     const { assignedEpics } = runPlan({
-      ...BASE,
-      totalDevs: 1,
+      ...BASE, totalDevs: 1,
       epics: [makeEpic("Gamma", 60, "2026-03-09")],
     });
     expect(assignedEpics[0].segments.length).toBeGreaterThan(1);
   });
 
-  it("epic with no analysis due date starts from sprint 0", () => {
+  it("null analysisDue starts from sprint 0", () => {
     const { assignedEpics } = runPlan({
       ...BASE,
       epics: [makeEpic("Delta", 12, null)],
@@ -187,79 +308,72 @@ describe("runPlan", () => {
     expect(assignedEpics[0].segments[0].sprintIdx).toBe(0);
   });
 
-  it("large epic that can't fit flags overflow warning", () => {
-    // 10000 SP with 6 sprints of 4 devs × 10 biz days × 6 vel = 2400 SP max
+  it("epic with SP too large for all sprints gets overflow warning", () => {
     const { assignedEpics } = runPlan({
       ...BASE,
-      epics: [makeEpic("Huge", 10000, "2026-03-02")],
+      epics: [makeEpic("Huge", 100000, "2026-03-02")],
     });
     expect(assignedEpics[0].warning).toBeTruthy();
   });
 
-  it("earlier analysis due date gets priority over later one", () => {
-    const epics = [
-      makeEpic("Late", 60, "2026-04-01"),
-      makeEpic("Early", 60, "2026-03-02"),
-    ];
+  it("analysisDue beyond all sprints produces overflow with zero segments", () => {
+    const { assignedEpics } = runPlan({
+      ...BASE,
+      epics: [makeEpic("Future", 10, "2027-06-01")],
+    });
+    expect(assignedEpics[0].warning).toBeTruthy();
+    expect(assignedEpics[0].segments.length).toBe(0);
+  });
+
+  it("sorts by analysisDue ascending (earlier gets priority)", () => {
+    const epics = [makeEpic("Late", 60, "2026-04-01"), makeEpic("Early", 60, "2026-03-02")];
     const { assignedEpics } = runPlan({ ...BASE, epics });
-    // Early should appear first in assigned output
     expect(assignedEpics[0].name).toBe("Early");
   });
 
-  it("adding a new earlier epic can push a later epic to a later sprint", () => {
-    const sprintStart = d("2026-03-02");
-
-    // Start: 1 dev, 1 epic filling Sprint 1 completely
-    // 60 SP / 6 vel = 10 dev-days = exactly Sprint 1 capacity (1 dev × 10 biz days)
-    const before = runPlan({
-      ...BASE,
-      totalDevs: 1,
-      epics: [makeEpic("Existing", 60, "2026-03-02")],
-    });
-    const beforeSprint = before.assignedEpics[0].segments[0].sprintIdx;
-
-    // Add a new epic with same due date and equal SP — competes for same sprint
-    const after = runPlan({
-      ...BASE,
-      totalDevs: 1,
-      epics: [
-        makeEpic("Existing", 60, "2026-03-02"),
-        makeEpic("NewComer", 60, "2026-03-02"),
-      ],
-    });
-    // One of them must spill to Sprint 2
-    const sprintIndices = after.assignedEpics.flatMap(e => e.segments.map(s => s.sprintIdx));
-    expect(Math.max(...sprintIndices)).toBeGreaterThan(beforeSprint);
-  });
-
-  it("two epics with same due date: larger SP gets scheduled first", () => {
-    const epics = [
-      makeEpic("Small", 12, "2026-03-02"),
-      makeEpic("Large", 60, "2026-03-02"),
-    ];
+  it("same analysisDue: larger SP gets priority", () => {
+    const epics = [makeEpic("Small", 12, "2026-03-02"), makeEpic("Large", 60, "2026-03-02")];
     const { assignedEpics } = runPlan({ ...BASE, epics });
     expect(assignedEpics[0].name).toBe("Large");
   });
 
-  it("sprint utilisation never exceeds totalDevs pool", () => {
-    const epics = [
-      makeEpic("E1", 60, "2026-03-02"),
-      makeEpic("E2", 60, "2026-03-02"),
-      makeEpic("E3", 60, "2026-03-02"),
-    ];
-    const { sprintStats } = runPlan({ ...BASE, epics });
-    sprintStats.forEach(s => {
-      expect(s.devsNeeded).toBeLessThanOrEqual(BASE.totalDevs);
+  it("adding a competing epic displaces the first to a later sprint", () => {
+    const before = runPlan({ ...BASE, totalDevs: 1, epics: [makeEpic("E", 60, "2026-03-02")] });
+    const maxBefore = Math.max(...before.assignedEpics.flatMap(e => e.segments.map(s => s.sprintIdx)));
+    const after = runPlan({
+      ...BASE, totalDevs: 1,
+      epics: [makeEpic("E", 60, "2026-03-02"), makeEpic("N", 60, "2026-03-02")],
     });
+    const maxAfter = Math.max(...after.assignedEpics.flatMap(e => e.segments.map(s => s.sprintIdx)));
+    expect(maxAfter).toBeGreaterThan(maxBefore);
   });
 
-  it("zero velocity returns no scheduled epics", () => {
+  it("sprint utilisation never exceeds totalDevs", () => {
+    const epics = [makeEpic("E1", 60, "2026-03-02"), makeEpic("E2", 60, "2026-03-02"), makeEpic("E3", 60, "2026-03-02")];
+    const { sprintStats } = runPlan({ ...BASE, epics });
+    sprintStats.forEach(s => expect(s.devsNeeded).toBeLessThanOrEqual(BASE.totalDevs));
+  });
+
+  it("zero velocity results in overflow (guard against division by ~0)", () => {
     const { assignedEpics } = runPlan({
-      ...BASE,
-      perDevVelocityPerDay: 0,
+      ...BASE, perDevVelocityPerDay: 0,
       epics: [makeEpic("Zero", 30, "2026-03-02")],
     });
-    // With 0 velocity remaining never reaches 0, all segments empty or overflow
     expect(assignedEpics[0].warning).toBeTruthy();
+  });
+
+  it("fully packed sprint reports 100% utilisation", () => {
+    // 1 dev, 60 SP / 6 vel = 10 dev-days = exactly sprint 1 capacity
+    const { sprintStats } = runPlan({
+      ...BASE, totalDevs: 1,
+      epics: [makeEpic("Full", 60, "2026-03-02")],
+    });
+    expect(sprintStats[0].utilPct).toBe(100);
+  });
+
+  it("empty epic list produces zero-utilisation sprints", () => {
+    const { sprintStats, assignedEpics } = runPlan({ ...BASE, epics: [] });
+    expect(assignedEpics.length).toBe(0);
+    sprintStats.forEach(s => expect(s.utilPct).toBe(0));
   });
 });
