@@ -907,7 +907,7 @@ export default function App() {
   const sprints        = devDueMode === "solo" ? soloSprints        : teamSprints;
 
   const totalSP = parsedEpics.reduce((a, e) => a + e.sp, 0);
-  const scheduled = assignedEpics.filter(e => e.buildComplete).length;
+  const scheduled = assignedEpics.filter(e => e.buildComplete && !e.warning).length;
   const warnings = assignedEpics.filter(e => e.warning).length;
 
   return (
