@@ -127,9 +127,12 @@ export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDat
   const sprintCapRemaining = sprints.map(s => totalDevs * s.bizDays);
 
   const assigned = sorted.map(epic => {
-    const firstIdx = epic.analysisDue
-      ? Math.max(0, sprints.findIndex(s => s.end > epic.analysisDue))
+    const foundIdx = epic.analysisDue
+      ? sprints.findIndex(s => s.end > epic.analysisDue)
       : 0;
+    // -1 means analysisDue is beyond all sprints → start past the end so the
+    // while loop never runs and the epic gets the overflow warning.
+    const firstIdx = foundIdx === -1 ? sprints.length : Math.max(0, foundIdx);
 
     let remaining = epic.sp / Math.max(perDevVelocityPerDay, 0.01);
     let s = firstIdx;
