@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, Fragment, useEffect } from "react";
 import {
   parseDate, fmtDate, calcSoloBuildDate, runPlan, addBizDaysFrom,
   calcStoryDates, calcFullFocusDate,
@@ -64,9 +64,9 @@ function TabBar({ tabs, active, onChange }) {
   );
 }
 
-function Tag({ children, color = C.accent }) {
+function Tag({ children, color = C.accent, title }) {
   return (
-    <span style={{
+    <span title={title} style={{
       background: color + "20", color, border: `1px solid ${color}40`,
       borderRadius: 4, padding: "1px 7px", fontSize: 10, letterSpacing: "0.05em", fontWeight: 600,
     }}>{children}</span>
@@ -87,14 +87,18 @@ function UtilBar({ v, max }) {
 }
 
 // ── Epic Input Tab ────────────────────────────────────────────────────────────
-const mkEpic = () => ({ id: Math.random(), name: "", sp: "", analysisDue: "" });
+const mkEpic = () => ({ id: Math.random(), name: "", sp: "", analysisDue: "", maxDevs: "" });
 
-function EpicInputTab({ epics, onChange, assignedEpics, perDevVelocityPerDay, teamSize, devDueMode }) {
+function EpicInputTab({ epics, onChange, assignedEpics, sprints, perDevVelocityPerDay, teamSize, devDueMode, maxDevsPerEpic }) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const sortedEpics = useMemo(() =>
-    [...epics].sort((a, b) => (parseFloat(a.sp) || 0) - (parseFloat(b.sp) || 0))
+    [...epics].sort((a, b) => {
+      const da = a.analysisDue ? new Date(a.analysisDue).getTime() : Infinity;
+      const db = b.analysisDue ? new Date(b.analysisDue).getTime() : Infinity;
+      return da - db;
+    })
   , [epics]);
 
   const buildMap = useMemo(() => {
@@ -131,23 +135,31 @@ function EpicInputTab({ epics, onChange, assignedEpics, perDevVelocityPerDay, te
 
   function handleCopyCSV() {
     const modeLabel = devDueMode === "solo" ? "Solo" : "Planned";
-    const header = ["Epic Name / ID","SP","Analysis Due","Full Focus Dev Due","Full Focus Test Due","Solo Dev Due Date","Planned Dev Due Date",`Test Due Date (${modeLabel})`,"Sprints","Status"];
+    const header = ["Epic Name / ID","SP","Max Devs","Analysis Due","Fix Version","Full Focus Dev Due","Full Focus Test Due","Solo Dev Due Date","Planned Dev Due Date",`Test Due Date (${modeLabel})`,"Peak Devs","Sprint(s)","POD","Status"];
     const rows = sortedEpics.map(ep => {
       const calc = buildMap[ep.id];
       const solo = calcSoloBuildDate(ep, perDevVelocityPerDay);
       const ff   = calcFullFocusDate(ep, perDevVelocityPerDay, teamSize);
       const baseDate = calc?.buildComplete;
       const testDue = baseDate ? fmtDate(addBizDaysFrom(baseDate, 20)) : "";
+      const peakDevs = calc?.segments?.length > 0 ? Math.max(...calc.segments.map(s => s.devs)) : "";
+      const sprintLabels = calc?.segments?.length > 0
+        ? calc.segments.map(s => (sprints[s.sprintIdx]?.label ?? `S${s.sprintIdx}`).replace("Sprint ", "S")).join(", ")
+        : "";
       return [
         ep.name,
         ep.sp,
+        ep.maxDevs || "",
         ep.analysisDue,
+        ep.fixVersion || "",
         ff ? fmtDate(ff) : "",
         ff ? fmtDate(addBizDaysFrom(ff, 20)) : "",
         solo ? fmtDate(solo) : "",
         calc?.buildComplete ? fmtDate(calc.buildComplete) : "",
         testDue,
-        calc?.segments?.length ?? "",
+        peakDevs,
+        sprintLabels,
+        (assignedEpics.find(a => a.id === ep.id) ?? {}).pod || "",
         calc?.warning ? "Overflow" : calc?.buildComplete ? "Scheduled" : "Pending",
       ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(",");
     });
@@ -196,22 +208,26 @@ function EpicInputTab({ epics, onChange, assignedEpics, perDevVelocityPerDay, te
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-              {["#","Epic Name / ID","SP","Analysis Due","Full Focus ⓘ","Solo Dev Due Date ⓘ","Planned Dev Due Date ↗",`Test Due Date (via ${devDueMode === "solo" ? "Solo ★" : "Planned ★"})`  ,"Sprints","Status",""].map(h => {
+              {["#","Epic Name / ID","SP","Max Devs ⓘ","Analysis Due","Fix Version","Full Focus ⓘ","Solo Dev Due Date ⓘ","Planned Dev Due Date ↗",`Test Due Date (via ${devDueMode === "solo" ? "Solo ★" : "Planned ★"})`  ,"Devs ⓘ","Sprint(s)","POD","Status",""].map(h => {
                 const isSolo = h === "Solo Dev Due Date ⓘ";
                 const isFF   = h === "Full Focus ⓘ";
+                const isMaxDevs = h === "Max Devs ⓘ";
                 const isTestDue = h.startsWith("Test Due");
+                const isDevs = h === "Devs ⓘ";
                 const isActive = (devDueMode === "solo" && isSolo) || (devDueMode === "planned" && h === "Planned Dev Due Date ↗");
                 return (
                   <th key={h}
                     title={
                       isFF      ? `All ${teamSize} dev${teamSize !== 1 ? "s" : ""} swarm this epic immediately after analysis — theoretical lower bound, ignores contention` :
                       isSolo    ? "Projection for 1 dev, no contention" :
-                      isTestDue ? `Derived from ${devDueMode === "solo" ? "Solo" : "Planned"} Dev Due Date` : undefined
+                      isMaxDevs ? `Max devs that can work this epic in parallel (overrides the global default of ${maxDevsPerEpic})` :
+                      isTestDue ? `Derived from ${devDueMode === "solo" ? "Solo" : "Planned"} Dev Due Date` :
+                      isDevs    ? "Peak devs allocated to this epic in any single sprint" : undefined
                     }
                     style={{ padding: "8px 12px", textAlign: "left",
                       color: isFF ? "#a78bfa" : isActive ? C.accent : isSolo ? C.mutedLight : C.muted,
                       fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: isActive ? 700 : 500,
-                      whiteSpace: "nowrap", cursor: isFF || isSolo || isTestDue ? "help" : "default" }}>{h}</th>
+                      whiteSpace: "nowrap", cursor: isFF || isSolo || isMaxDevs || isTestDue || isDevs ? "help" : "default" }}>{h}</th>
                 );
               })}
             </tr>
@@ -235,9 +251,17 @@ function EpicInputTab({ epics, onChange, assignedEpics, perDevVelocityPerDay, te
                       style={inputStyle({ width: 64 })} />
                   </td>
                   <td style={{ padding: "4px 8px" }}>
+                    <input value={ep.maxDevs ?? ""} onChange={e => update(ep.id, "maxDevs", e.target.value)}
+                      type="number" min={1} placeholder={maxDevsPerEpic}
+                      style={inputStyle({ width: 56 })} />
+                  </td>
+                  <td style={{ padding: "4px 8px" }}>
                     <input value={ep.analysisDue} onChange={e => update(ep.id, "analysisDue", e.target.value)}
                       placeholder="YYYY-MM-DD"
                       style={inputStyle({ width: 130 })} />
+                  </td>
+                  <td style={{ padding: "8px 12px", color: C.mutedLight, fontSize: 11, whiteSpace: "nowrap" }}>
+                    {ep.fixVersion || "—"}
                   </td>
                   <td style={{ padding: "8px 12px", color: "#a78bfa", fontSize: 12, whiteSpace: "nowrap", fontWeight: 500 }}>
                     {ff ? fmtDate(ff) : "—"}
@@ -252,11 +276,19 @@ function EpicInputTab({ epics, onChange, assignedEpics, perDevVelocityPerDay, te
                     {calc?.buildComplete ? fmtDate(addBizDaysFrom(calc.buildComplete, 20)) : "—"}
                   </td>
                   <td style={{ padding: "8px 12px", color: C.mutedLight, fontSize: 12 }}>
-                    {calc?.segments?.length > 0 ? `${calc.segments.length}` : "—"}
+                    {calc?.segments?.length > 0 ? Math.max(...calc.segments.map(s => s.devs)) : "—"}
                   </td>
+                  <td style={{ padding: "8px 12px", color: C.mutedLight, fontSize: 11, whiteSpace: "nowrap" }}>
+                    {calc?.segments?.length > 0
+                      ? calc.segments.map(s => (sprints[s.sprintIdx]?.label ?? `S${s.sprintIdx}`).replace("Sprint ", "S")).join(", ")
+                      : "—"}
+                  </td>
+              <td style={{ padding: "8px 12px", color: C.mutedLight, fontSize: 11, whiteSpace: "nowrap" }}>
+                {ep.pod || "—"}
+              </td>
                   <td style={{ padding: "8px 12px" }}>
                     {calc?.warning
-                      ? <Tag color={C.accent2}>⚠ Overflow</Tag>
+                      ? <Tag color={C.accent2} title={calc.warning}>⚠ Overflow</Tag>
                       : calc?.buildComplete
                         ? <Tag color={devDueMode === "solo" ? C.amber : C.accent}>{devDueMode === "solo" ? "✓ Solo" : "✓ Scheduled"}</Tag>
                         : <Tag color={C.muted}>Pending</Tag>}
@@ -281,33 +313,149 @@ function EpicInputTab({ epics, onChange, assignedEpics, perDevVelocityPerDay, te
   );
 }
 
-// ── Demand Table ──────────────────────────────────────────────────────────────
-function DemandTable({ sprintStats, teamSize }) {
+// ── Sprint Demand (combined Demand Table + Epic Breakdown) ────────────────────
+function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrides, onStaffingChange, onEpicClick }) {
+  const [openSet, setOpenSet] = useState(new Set());
+  const [copied, setCopied] = useState(false);
+
+  function toggle(i) {
+    setOpenSet(prev => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
+  }
+  function expandAll()  { setOpenSet(new Set(sprintStats.map((_, i) => i))); }
+  function collapseAll() { setOpenSet(new Set()); }
+
+  function copyCSV() {
+    const headers = ["Sprint","Start","End","Biz Days","Min Req","Staffed","Gap","Epic","Epic SP","Analysis Due","Devs (this sprint)","Dev-days (this sprint)"];
+    const rows = [];
+    sprintStats.forEach((s, i) => {
+      const minReq  = uncappedStats?.[i]?.devsNeeded ?? 0;
+      const staffed = staffingOverrides[i] ?? teamSize;
+      const gap     = staffed - minReq;
+      if (s.activeEpics.length === 0) {
+        rows.push([s.label, fmtDate(s.start), fmtDate(s.end), s.bizDays, minReq, staffed, gap, "", "", "", "", ""]);
+      } else {
+        s.activeEpics.forEach((e, ei) => {
+          rows.push([
+            ei === 0 ? s.label : "",
+            ei === 0 ? fmtDate(s.start) : "",
+            ei === 0 ? fmtDate(s.end) : "",
+            ei === 0 ? s.bizDays : "",
+            ei === 0 ? minReq : "",
+            ei === 0 ? staffed : "",
+            ei === 0 ? gap : "",
+            e.name, e.sp, e.analysisDue ? fmtDate(e.analysisDue) : "", e.devs.toFixed(1), e.devDays.toFixed(1),
+          ]);
+        });
+      }
+    });
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    navigator.clipboard.writeText(csv).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  const allOpen = openSet.size === sprintStats.length;
+
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+        <button onClick={allOpen ? collapseAll : expandAll} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "5px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+          {allOpen ? "Collapse All" : "Expand All"}
+        </button>
+        <button onClick={copyCSV} style={{
+          background: copied ? C.accent + "22" : "transparent",
+          border: `1px solid ${copied ? C.accent : C.border}`,
+          color: copied ? C.accent : C.muted,
+          borderRadius: 6, padding: "5px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          transition: "all 0.2s",
+        }}>
+          {copied ? "✓ Copied!" : "Copy CSV"}
+        </button>
+      </div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-            {["Sprint","Start","End","Biz Days","Devs Needed","Devs Free","Utilisation","Active Epics"].map(h => (
-              <th key={h} style={{ padding: "9px 14px", textAlign: "left", color: C.muted, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>
+            {["Sprint","Start","End","Biz Days","Min Req ⓘ","Staffed ⓘ","Gap",""].map((h, i) => (
+              <th key={i} title={h === "Min Req ⓘ" ? "Minimum devs needed to avoid slippage (uncapped plan)" : h === "Staffed ⓘ" ? "Your planned headcount per sprint — edit inline" : undefined} style={{ padding: "9px 14px", textAlign: i === 7 ? "center" : "left", color: C.muted, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 500, whiteSpace: "nowrap", cursor: h.endsWith("ⓘ") ? "help" : "default" }}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {sprintStats.map((s, i) => (
-            <tr key={i} style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? "transparent" : C.surface + "55" }}>
-              <td style={{ padding: "9px 14px", color: C.text, fontWeight: 600, whiteSpace: "nowrap" }}>{s.label}</td>
-              <td style={{ padding: "9px 14px", color: C.muted, whiteSpace: "nowrap" }}>{fmtDate(s.start)}</td>
-              <td style={{ padding: "9px 14px", color: C.muted, whiteSpace: "nowrap" }}>{fmtDate(s.end)}</td>
-              <td style={{ padding: "9px 14px", color: C.mutedLight }}>{s.bizDays}</td>
-              <td style={{ padding: "9px 14px", color: s.devsNeeded > teamSize ? C.accent2 : C.accent, fontWeight: 700, fontSize: 15 }}>{s.devsNeeded}</td>
-              <td style={{ padding: "9px 14px", color: s.devsFree < 0 ? C.accent2 : C.text }}>{s.devsFree}</td>
-              <td style={{ padding: "9px 14px" }}><UtilBar v={s.devsNeeded} max={teamSize} /></td>
-              <td style={{ padding: "9px 14px", color: C.mutedLight, fontSize: 11, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {s.activeEpics.map(e => e.name).join(", ") || "—"}
-              </td>
-            </tr>
-          ))}
+          {sprintStats.map((s, i) => {
+            const isOpen = openSet.has(i);
+            return (
+              <Fragment key={i}>
+                <tr
+                  onClick={() => toggle(i)}
+                  style={{ borderBottom: `1px solid ${C.border}22`, background: i % 2 === 0 ? "transparent" : C.surface + "55", cursor: "pointer" }}
+                >
+                  <td style={{ padding: "9px 14px", color: C.text, fontWeight: 600, whiteSpace: "nowrap" }}>{s.label}</td>
+                  <td style={{ padding: "9px 14px", color: C.muted, whiteSpace: "nowrap" }}>{fmtDate(s.start)}</td>
+                  <td style={{ padding: "9px 14px", color: C.muted, whiteSpace: "nowrap" }}>{fmtDate(s.end)}</td>
+                  <td style={{ padding: "9px 14px", color: C.mutedLight }}>{s.bizDays}</td>
+                  {(() => {
+                    const minReq  = uncappedStats?.[i]?.devsNeeded ?? 0;
+                    const staffed = staffingOverrides[i] ?? teamSize;
+                    const gap     = staffed - minReq;
+                    return <>
+                      <td style={{ padding: "9px 14px", color: C.accent, fontWeight: 700, fontSize: 15 }}>{minReq}</td>
+                      <td style={{ padding: "4px 8px" }} onClick={e => e.stopPropagation()}>
+                        <input type="number" min={0} value={staffed}
+                          onChange={e => onStaffingChange(i, Math.max(0, Number(e.target.value)))}
+                          style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 7px", fontSize: 13, width: 56, fontFamily: "inherit", outline: "none" }} />
+                      </td>
+                      <td style={{ padding: "9px 14px", color: gap < 0 ? C.accent2 : gap === 0 ? C.mutedLight : C.accent, fontWeight: 700 }}>
+                        {gap > 0 ? `+${gap}` : gap}
+                      </td>
+                    </>;
+                  })()}
+                  <td style={{ padding: "9px 14px", textAlign: "center", color: C.accent, fontSize: 11 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 5, justifyContent: "center" }}>
+                      <span style={{ color: C.muted, fontSize: 10 }}>{s.activeEpics.length} epic{s.activeEpics.length !== 1 ? "s" : ""}</span>
+                      {isOpen ? "▲" : "▼"}
+                    </span>
+                  </td>
+                </tr>
+                {isOpen && (
+                  <tr style={{ background: C.bg }}>
+                    <td colSpan={8} style={{ padding: "0 0 6px 36px", borderBottom: `1px solid ${C.border}44` }}>
+                      {s.activeEpics.length === 0
+                        ? <span style={{ color: C.muted, fontSize: 12, display: "block", padding: "10px 0" }}>No epics active this sprint.</span>
+                        : (
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 4 }}>
+                            <thead>
+                              <tr>{["Epic","Total SP","Analysis Due","Devs this sprint","Dev-days"].map(h => (
+                                <th key={h} style={{ textAlign: "left", color: C.muted, padding: "4px 10px", fontWeight: 500, fontSize: 10, letterSpacing: "0.08em" }}>{h}</th>
+                              ))}</tr>
+                            </thead>
+                            <tbody>
+                              {s.activeEpics.map((e, ei) => (
+                                <tr key={ei} style={{ borderTop: `1px solid ${C.border}22` }}>
+                                  <td style={{ padding: "6px 10px", color: C.text }}>
+                                    {onEpicClick
+                                      ? <button onClick={() => onEpicClick(e.name)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline dotted" }} title="Open in Write-back">{e.name}</button>
+                                      : e.name}
+                                  </td>
+                                  <td style={{ padding: "6px 10px", color: C.muted }}>{(Math.ceil(parseFloat(e.sp || 0) * 100) / 100).toFixed(2)}</td>
+                                  <td style={{ padding: "6px 10px", color: C.amber, whiteSpace: "nowrap" }}>{e.analysisDue ? fmtDate(e.analysisDue) : "—"}</td>
+                                  <td style={{ padding: "6px 10px", color: C.accent, fontWeight: 700 }}>{e.devs.toFixed(1)}</td>
+                                  <td style={{ padding: "6px 10px", color: C.mutedLight }}>{e.devDays.toFixed(1)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -363,6 +511,8 @@ function UtilChart({ sprintStats, teamSize }) {
 function GanttView({ assignedEpics, sprints }) {
   const colors = [C.accent,"#7c3aed","#ec4899",C.amber,C.accent2,"#06b6d4","#84cc16","#f97316","#a78bfa","#34d399"];
   if (!sprints.length || !assignedEpics.length) return <div style={{ color: C.muted, padding: "48px 0", textAlign: "center" }}>No data.</div>;
+  const usedIndices = new Set(assignedEpics.flatMap(e => (e.segments || []).map(s => s.sprintIdx)));
+  const visibleSprints = sprints.map((s, i) => ({ ...s, origIdx: i })).filter(s => usedIndices.has(s.origIdx));
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
@@ -371,8 +521,8 @@ function GanttView({ assignedEpics, sprints }) {
             <th style={{ padding: "6px 12px", textAlign: "left", color: C.muted, minWidth: 220, position: "sticky", left: 0, background: C.surface, zIndex: 2 }}>Epic</th>
             <th style={{ padding: "6px 10px", color: C.muted, minWidth: 50, textAlign: "center" }}>SP</th>
             <th style={{ padding: "6px 10px", color: C.muted, minWidth: 110, textAlign: "left", whiteSpace: "nowrap" }}>Build Complete</th>
-            {sprints.map((s, i) => (
-              <th key={i} style={{ padding: "4px 2px", color: C.muted, minWidth: 38, textAlign: "center" }}>
+            {visibleSprints.map(s => (
+              <th key={s.origIdx} style={{ padding: "4px 2px", color: C.muted, minWidth: 38, textAlign: "center" }}>
                 <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", height: 66, fontSize: 9 }}>{s.label}</div>
               </th>
             ))}
@@ -386,12 +536,12 @@ function GanttView({ assignedEpics, sprints }) {
             return (
               <tr key={ep.id} style={{ borderBottom: `1px solid ${C.border}22` }}>
                 <td style={{ padding: "6px 12px", color: C.text, position: "sticky", left: 0, background: C.surface, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ep.name}>{ep.name || `Epic ${ri + 1}`}</td>
-                <td style={{ padding: "6px 10px", color: C.muted, textAlign: "center" }}>{ep.sp}</td>
+                <td style={{ padding: "6px 10px", color: C.muted, textAlign: "center" }}>{(parseFloat(ep.sp)||0).toFixed(2)}</td>
                 <td style={{ padding: "6px 10px", color: ep.warning ? C.accent2 : C.accent, fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(ep.buildComplete)}</td>
-                {sprints.map((_, si) => {
-                  const seg = segMap[si];
+                {visibleSprints.map(s => {
+                  const seg = segMap[s.origIdx];
                   return (
-                    <td key={si} style={{ padding: "3px 2px", textAlign: "center" }}>
+                    <td key={s.origIdx} style={{ padding: "3px 2px", textAlign: "center" }}>
                       {seg ? (
                         <div title={`${seg.devs} dev(s) · ${seg.devDays.toFixed(1)} dev-days`} style={{
                           background: color, borderRadius: 3, height: 22, minWidth: 34,
@@ -411,59 +561,9 @@ function GanttView({ assignedEpics, sprints }) {
   );
 }
 
-// ── Epic Breakdown ────────────────────────────────────────────────────────────
-function EpicBreakdown({ sprintStats, teamSize }) {
-  const [open, setOpen] = useState(null);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      {sprintStats.map((s, i) => (
-        <div key={i}>
-          <button onClick={() => setOpen(open === i ? null : i)} style={{
-            width: "100%", background: open === i ? C.surface2 : C.surface,
-            border: `1px solid ${C.border}`, borderRadius: 6, padding: "10px 16px",
-            color: C.text, cursor: "pointer", display: "flex", justifyContent: "space-between",
-            alignItems: "center", fontFamily: "inherit", fontSize: 13,
-          }}>
-            <span style={{ fontWeight: 600 }}>{s.label}</span>
-            <span style={{ display: "flex", gap: 16, alignItems: "center" }}>
-              <span style={{ color: s.devsNeeded > teamSize ? C.accent2 : C.accent, fontWeight: 700 }}>{s.devsNeeded} devs</span>
-              <span style={{ color: C.muted, fontSize: 11 }}>{s.activeEpics.length} epic{s.activeEpics.length !== 1 ? "s" : ""}</span>
-              <UtilBar v={s.devsNeeded} max={teamSize} />
-              <span style={{ color: C.accent }}>{open === i ? "▲" : "▼"}</span>
-            </span>
-          </button>
-          {open === i && (
-            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 6px 6px", padding: "12px 16px" }}>
-              {s.activeEpics.length === 0
-                ? <span style={{ color: C.muted, fontSize: 12 }}>No epics active this sprint.</span>
-                : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                    <thead>
-                      <tr>{["Epic","Total SP","Devs this sprint","Dev-days"].map(h => (
-                        <th key={h} style={{ textAlign: "left", color: C.muted, padding: "4px 10px", fontWeight: 500, fontSize: 10, letterSpacing: "0.08em" }}>{h}</th>
-                      ))}</tr>
-                    </thead>
-                    <tbody>
-                      {s.activeEpics.map((e, ei) => (
-                        <tr key={ei} style={{ borderTop: `1px solid ${C.border}22` }}>
-                          <td style={{ padding: "7px 10px", color: C.text }}>{e.name}</td>
-                          <td style={{ padding: "7px 10px", color: C.muted }}>{e.sp}</td>
-                          <td style={{ padding: "7px 10px", color: C.accent, fontWeight: 700 }}>{e.devs}</td>
-                          <td style={{ padding: "7px 10px", color: C.mutedLight }}>{e.devDays.toFixed(1)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
+
 // ── Jira Import Tab ─────────────────────────────────────────────────────────────
-function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql, setJiraJql, onImport, existingCount }) {
+function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql, setJiraJql, fixVersionScope, setFixVersionScope, onImport, existingCount }) {
   const [showToken, setShowToken] = useState(false);
   const [status, setStatus] = useState(null);   // null | "loading" | "done" | "error"
   const [msg, setMsg] = useState("");
@@ -492,18 +592,23 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
           setProgress({ fetched: allIssues.length, total });
         },
       });
-      // Collect epic keys and fetch their SP from Jira
+      // Collect epic keys and fetch their SP + fixVersions from Jira
       const epicKeys = [...new Set(allIssues.map(i => i.fields?.["customfield_10002"]).filter(Boolean))];
       const epicSpMap = {};
+      const epicFixVersionMap = {};
       if (epicKeys.length) {
         setProgress(p => ({ ...p, fetched: p.fetched }));
-        const epicIssues = await fetchIssuesByKeys({ base, token, keys: epicKeys, fields: [F_SP], signal: ac.signal });
+        const epicIssues = await fetchIssuesByKeys({ base, token, keys: epicKeys, fields: [F_SP, "fixVersions"], signal: ac.signal });
         epicIssues.forEach(i => {
           const sp = parseFloat(i.fields?.[F_SP]);
           if (sp > 0) epicSpMap[i.key] = sp;
+          const fv = i.fields?.fixVersions;
+          if (Array.isArray(fv) && fv.length) {
+            epicFixVersionMap[i.key] = fv.map(v => v.name).filter(Boolean);
+          }
         });
       }
-      const { epics, storyMap, orphanStories } = groupStoriesByEpic(allIssues, epicSpMap);
+      const { epics, storyMap, orphanStories } = groupStoriesByEpic(allIssues, epicSpMap, epicFixVersionMap, fixVersionScope);
       onImport(epics, storyMap);
       setStatus("done");
       const orphanNote = orphanStories.length ? ` · ${orphanStories.length} stories had no epic link (excluded)` : "";
@@ -559,6 +664,19 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
           style={inputStyle({ width: "100%", resize: "vertical", lineHeight: 1.6 })} />
       </div>
 
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <div>
+          <label style={labelStyle()} title="When set, epics whose Fix Version differs from this value will use story sum SP only (ignores epic estimate). Leave blank to always use epic estimate.">Fix Version scope <span style={{ color: C.muted }}>(optional)</span></label>
+          <input value={fixVersionScope} onChange={e => { setFixVersionScope(e.target.value); sessionStorage.setItem("sp_fixVersionScope", e.target.value); }}
+            placeholder="e.g. R1.1"
+            style={inputStyle({ width: 140 })} />
+        </div>
+        <div style={{ color: C.muted, fontSize: 10, lineHeight: 1.5, paddingBottom: 4, maxWidth: 460 }}>
+          If set: when the epic's Fix Version ≠ this value, story sum is used instead of the epic SP estimate.
+          Useful when R1.1 stories belong to an R1 epic whose total estimate covers more than this scope.
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         {confirmOverwrite ? (
           <>
@@ -602,12 +720,19 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
 }
 
 // ── Write-back Tab ────────────────────────────────────────────────────────────
-function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jiraToken }) {
+function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jiraToken, focusEpicKey }) {
   const [selected, setSelected] = useState(new Set());
   const [statuses, setStatuses] = useState({});
   const [submitting, setSubmitting] = useState(false);
   // epicKey → string: user-overridden SP budget
   const [epicBudgets, setEpicBudgets] = useState({});
+
+  // Scroll to the focused epic row when navigated from Sprint Demand
+  useEffect(() => {
+    if (!focusEpicKey) return;
+    const el = document.getElementById(`wb-epic-${CSS.escape(focusEpicKey)}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusEpicKey]);
 
   // Build epic groups with proportional SP redistribution
   const epicGroups = useMemo(() => {
@@ -726,7 +851,7 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
                 <input type="checkbox" checked={allSelected} onChange={toggleAll}
                   style={{ cursor: "pointer", accentColor: C.accent }} />
               </th>
-              {["Story","Summary","SP → Eff. SP","Analysis Due","New Dev Due","Curr Dev Due","New Test Due","Curr Test Due","Status"].map(h => (
+              {["Story","Summary","Status","Product","POD","SP → Eff. SP","Analysis Due","New Dev Due","Curr Dev Due","New Test Due","Curr Test Due","Write-back"].map(h => (
                 <th key={h} style={{ padding: "8px 10px", textAlign: "left", color: C.muted, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
@@ -736,7 +861,7 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
               const groupKeys  = rows.filter(r => r.hasDate).map(r => r.key);
               const groupAllOn = groupKeys.length > 0 && groupKeys.every(k => selected.has(k));
               return [
-                <tr key={`hdr-${epicKey}`} style={{ background: C.surface2, borderTop: `2px solid ${C.border}` }}>
+                <tr key={`hdr-${epicKey}`} id={`wb-epic-${epicKey}`} style={{ background: focusEpicKey === epicKey ? C.accent + "18" : C.surface2, borderTop: `2px solid ${focusEpicKey === epicKey ? C.accent : C.border}`, transition: "background 0.4s" }}>
                   <td style={{ padding: "8px 10px", textAlign: "center" }}>
                     <input type="checkbox" checked={groupAllOn} onChange={() => toggleGroup(rows)}
                       disabled={groupKeys.length === 0 || submitting}
@@ -760,7 +885,7 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
                       </span>
                     </div>
                   </td>
-                  <td colSpan={6} />
+                  <td colSpan={9} />
                 </tr>,
                 ...rows.map(row => {
                   const st = statuses[row.key];
@@ -779,6 +904,9 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
                           style={{ color: C.accent, textDecoration: "none", fontWeight: 600 }}>{row.key}</a>
                       </td>
                       <td style={{ padding: "5px 10px", color: C.text, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.summary}>{row.summary}</td>
+                      <td style={{ padding: "5px 10px", color: C.muted, whiteSpace: "nowrap", fontSize: 11 }}>{row.status || "\u2014"}</td>
+                      <td style={{ padding: "5px 10px", color: C.muted, whiteSpace: "nowrap", fontSize: 11, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }} title={row.product}>{row.product || "\u2014"}</td>
+                      <td style={{ padding: "5px 10px", color: C.muted, whiteSpace: "nowrap", fontSize: 11 }}>{row.pod || "\u2014"}</td>
                       <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
                         <span style={{ color: C.muted }}>{(parseFloat(row.sp) || 0).toFixed(2)}</span>
                         <span style={{ color: C.border, margin: "0 5px" }}>→</span>
@@ -850,7 +978,8 @@ export default function App() {
   const [epicRows, setEpicRows] = useState(SAMPLE_EPICS);
   const [teamRaw, setTeamRaw] = useState(SAMPLE_TEAM);
   const [velCol, setVelCol] = useState(3);
-  const [numSprints, setNumSprints] = useState(21);
+  const [targetDate, setTargetDate] = useState("2026-09-28");
+  const [sprintLengthDays, setSprintLengthDays] = useState(14);
   const [sprintStart, setSprintStart] = useState("2026-02-16");
   const [startSprintNum, setStartSprintNum] = useState(90);
   const [activeTab, setActiveTab] = useState("Epic Input");
@@ -858,7 +987,11 @@ export default function App() {
   const [jiraBase, setJiraBase] = useState(() => sessionStorage.getItem("sp_jiraBase") || "");
   const [jiraToken, setJiraToken] = useState("");
   const [jiraJql, setJiraJql] = useState(() => sessionStorage.getItem("sp_jiraJql") || "");
+  const [jiraFixVersionScope, setJiraFixVersionScope] = useState(() => sessionStorage.getItem("sp_fixVersionScope") || "");
   const [storyMap, setStoryMap] = useState({});
+  const [writebackFocusKey, setWritebackFocusKey] = useState(null);
+  const [maxDevsPerEpic, setMaxDevsPerEpic] = useState(2);
+  const [staffingOverrides, setStaffingOverrides] = useState({});
 
   const { perDevVelocityPerDay, teamSize } = useMemo(() => {
     const rows = parseTSV(teamRaw);
@@ -869,20 +1002,40 @@ export default function App() {
 
   const parsedEpics = useMemo(() => epicRows.map(e => ({
     id: e.id, name: e.name, sp: parseFloat(e.sp) || 0, analysisDue: parseDate(e.analysisDue),
+    maxDevs: parseInt(e.maxDevs) > 0 ? parseInt(e.maxDevs) : null,
+    pod: e.pod || "",
   })), [epicRows]);
 
-  const { sprintStats: teamSprintStats, assignedEpics: teamAssignedEpics, sprints: teamSprints } = useMemo(() => runPlan({
-    epics: parsedEpics, perDevVelocityPerDay, totalDevs: teamSize,
+  const numSprints = useMemo(() => {
+    const start = parseDate(sprintStart);
+    const end   = parseDate(targetDate);
+    if (!start || !end || end <= start) return 1;
+    return Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (sprintLengthDays * 24 * 60 * 60 * 1000)));
+  }, [sprintStart, targetDate, sprintLengthDays]);
+
+  const totalDevsArray = useMemo(() =>
+    Array.from({ length: numSprints }, (_, i) => staffingOverrides[i] ?? teamSize),
+    [numSprints, staffingOverrides, teamSize]);
+
+  // Uncapped plan: gives minimum required devs per sprint (reverse planning)
+  const { sprintStats: uncappedStats } = useMemo(() => runPlan({
+    epics: parsedEpics, perDevVelocityPerDay, totalDevs: 999,
     sprintStartDate: parseDate(sprintStart) || new Date("2026-02-16"),
-    numSprints, startSprintNum,
-  }), [parsedEpics, perDevVelocityPerDay, teamSize, sprintStart, numSprints, startSprintNum]);
+    numSprints, startSprintNum, maxDevsPerEpic, sprintLengthDays,
+  }), [parsedEpics, perDevVelocityPerDay, sprintStart, numSprints, startSprintNum, maxDevsPerEpic, sprintLengthDays]);
+
+  const { sprintStats: teamSprintStats, assignedEpics: teamAssignedEpics, sprints: teamSprints } = useMemo(() => runPlan({
+    epics: parsedEpics, perDevVelocityPerDay, totalDevs: totalDevsArray,
+    sprintStartDate: parseDate(sprintStart) || new Date("2026-02-16"),
+    numSprints, startSprintNum, maxDevsPerEpic, sprintLengthDays,
+  }), [parsedEpics, perDevVelocityPerDay, totalDevsArray, sprintStart, numSprints, startSprintNum, maxDevsPerEpic, sprintLengthDays]);
 
   // Solo plan: 1 dev total — shows what sequential solo execution looks like
   const { sprintStats: soloSprintStats, assignedEpics: soloAssignedEpics, sprints: soloSprints } = useMemo(() => runPlan({
     epics: parsedEpics, perDevVelocityPerDay, totalDevs: 1,
     sprintStartDate: parseDate(sprintStart) || new Date("2026-02-16"),
-    numSprints, startSprintNum,
-  }), [parsedEpics, perDevVelocityPerDay, sprintStart, numSprints, startSprintNum]);
+    numSprints, startSprintNum, maxDevsPerEpic: 1, sprintLengthDays,
+  }), [parsedEpics, perDevVelocityPerDay, sprintStart, numSprints, startSprintNum, sprintLengthDays]);
 
   const sprintStats    = devDueMode === "solo" ? soloSprintStats    : teamSprintStats;
   const assignedEpics  = devDueMode === "solo" ? soloAssignedEpics  : teamAssignedEpics;
@@ -930,20 +1083,38 @@ export default function App() {
         <div style={{ width: 272, borderRight: `1px solid ${C.border}`, padding: "18px 16px", flexShrink: 0, background: C.surface, display: "flex", flexDirection: "column", gap: 14, overflowY: "auto" }}>
           <div style={{ color: C.muted, fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase" }}>● Sprint Config</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {[["Start sprint #",startSprintNum,setStartSprintNum,1,999],["# sprints",numSprints,setNumSprints,1,60]].map(([lbl,val,setter,min,max])=>(
-              <div key={lbl}>
-                <label style={{ color: C.muted, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }}>{lbl}</label>
-                <input type="number" min={min} max={max} value={val} onChange={e=>setter(Number(e.target.value))}
-                  style={inputStyle({ width: "100%", marginTop: 3 })} />
-              </div>
-            ))}
+            <div>
+              <label style={{ color: C.muted, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }}>Start sprint #</label>
+              <input type="number" min={1} max={999} value={startSprintNum} onChange={e => setStartSprintNum(Number(e.target.value))}
+                style={inputStyle({ width: "100%", marginTop: 3 })} />
+            </div>
+            <div>
+              <label style={{ color: C.muted, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }}>Sprint days</label>
+              <input type="number" min={1} max={30} value={sprintLengthDays} onChange={e => setSprintLengthDays(Math.max(1, Number(e.target.value)))}
+                style={inputStyle({ width: "100%", marginTop: 3 })} />
+            </div>
             <div style={{ gridColumn: "1/3" }}>
               <label style={{ color: C.muted, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }}>Sprint 1 start</label>
-              <input type="date" value={sprintStart} onChange={e=>setSprintStart(e.target.value)}
+              <input type="date" value={sprintStart} onChange={e => setSprintStart(e.target.value)}
                 style={inputStyle({ width: "100%", marginTop: 3 })} />
+            </div>
+            <div style={{ gridColumn: "1/3" }}>
+              <label style={{ color: C.muted, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }} title="Planning horizon · drives sprint count and reverse-planning deadline">Target date ⓘ</label>
+              <input type="date" value={targetDate} onChange={e => setTargetDate(e.target.value)}
+                style={inputStyle({ width: "100%", marginTop: 3 })} />
+            </div>
+            <div style={{ gridColumn: "1/3", color: C.muted, fontSize: 10 }}>
+              → <span style={{ color: C.accent }}>{numSprints} sprint{numSprints !== 1 ? "s" : ""}</span>
             </div>
           </div>
 
+          <div style={{ height: 1, background: C.border }} />
+          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase" }}>● Concurrency</div>
+          <div>
+            <label style={{ color: C.muted, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }} title="Max devs that can work one epic simultaneously. Override per epic in Epic Input.">Max devs / epic ⓘ</label>
+            <input type="number" min={1} max={teamSize} value={maxDevsPerEpic} onChange={e => setMaxDevsPerEpic(Math.max(1, Number(e.target.value)))}
+              style={inputStyle({ width: 60, marginTop: 3 })} />
+          </div>
           <div style={{ height: 1, background: C.border }} />
           <div style={{ color: C.muted, fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase" }}>● Team Velocity</div>
           <div>
@@ -994,17 +1165,18 @@ export default function App() {
         {/* Main */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <TabBar
-            tabs={["Epic Input","Jira Import","Write-back","Demand Table","Utilisation Chart","Epic Breakdown","Gantt"]}
+            tabs={["Epic Input","Jira Import","Write-back","Sprint Demand","Utilisation Chart","Gantt"]}
             active={activeTab}
             onChange={setActiveTab}
           />
           <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto", overflowX: "auto" }}>
-            {activeTab === "Epic Input" && <EpicInputTab epics={epicRows} onChange={setEpicRows} assignedEpics={assignedEpics} perDevVelocityPerDay={perDevVelocityPerDay} teamSize={teamSize} devDueMode={devDueMode} />}
+            {activeTab === "Epic Input" && <EpicInputTab epics={epicRows} onChange={setEpicRows} assignedEpics={assignedEpics} sprints={sprints} perDevVelocityPerDay={perDevVelocityPerDay} teamSize={teamSize} devDueMode={devDueMode} maxDevsPerEpic={maxDevsPerEpic} />}
             {activeTab === "Jira Import" && (
               <JiraImportTab
                 jiraBase={jiraBase} setJiraBase={setJiraBase}
                 jiraToken={jiraToken} setJiraToken={setJiraToken}
                 jiraJql={jiraJql} setJiraJql={setJiraJql}
+                fixVersionScope={jiraFixVersionScope} setFixVersionScope={setJiraFixVersionScope}
                 existingCount={epicRows.filter(e => e.name || e.sp).length}
                 onImport={(epics, sm) => { setEpicRows(epics); setStoryMap(sm); setActiveTab("Epic Input"); }}
               />
@@ -1016,11 +1188,11 @@ export default function App() {
                 perDevVelocityPerDay={perDevVelocityPerDay}
                 jiraBase={jiraBase}
                 jiraToken={jiraToken}
+                focusEpicKey={writebackFocusKey}
               />
             )}
-            {activeTab === "Demand Table" && <DemandTable sprintStats={sprintStats} teamSize={teamSize} />}
+            {activeTab === "Sprint Demand" && <SprintDemandTab sprintStats={sprintStats} uncappedStats={uncappedStats} teamSize={teamSize} staffingOverrides={staffingOverrides} onStaffingChange={(i, v) => setStaffingOverrides(prev => ({ ...prev, [i]: v }))} onEpicClick={epicKey => { setWritebackFocusKey(epicKey); setActiveTab("Write-back"); }} />}
             {activeTab === "Utilisation Chart" && <UtilChart sprintStats={sprintStats} teamSize={teamSize} />}
-            {activeTab === "Epic Breakdown" && <EpicBreakdown sprintStats={sprintStats} teamSize={teamSize} />}
             {activeTab === "Gantt" && <GanttView assignedEpics={assignedEpics} sprints={sprints} />}
           </div>
         </div>

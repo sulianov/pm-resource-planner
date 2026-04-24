@@ -354,6 +354,18 @@ describe("runPlan", () => {
     sprintStats.forEach(s => expect(s.devsNeeded).toBeLessThanOrEqual(BASE.totalDevs));
   });
 
+  it("devsNeeded never exceeds totalDevs when an epic has a mid-sprint analysisDue", () => {
+    // "Full" uses 20 dev-days over 10 days → devs=2
+    // "Mid" has analysisDue 2026-03-09 (effectiveBizDays=5): 20 dev-days over 5 days → devs=4
+    // Old formula: 2+4=6 > totalDevs=4 (bug). New formula: round(40/10)=4 ≤ 4.
+    const epics = [
+      makeEpic("Full", 120, "2026-03-02"),
+      makeEpic("Mid",  120, "2026-03-09"),
+    ];
+    const { sprintStats } = runPlan({ ...BASE, epics });
+    sprintStats.forEach(s => expect(s.devsNeeded).toBeLessThanOrEqual(BASE.totalDevs));
+  });
+
   it("zero velocity results in overflow (guard against division by ~0)", () => {
     const { assignedEpics } = runPlan({
       ...BASE, perDevVelocityPerDay: 0,

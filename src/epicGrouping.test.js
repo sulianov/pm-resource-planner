@@ -152,13 +152,22 @@ describe("groupStoriesByEpic", () => {
     expect(parseFloat(epics[0].sp)).toBe(5);
   });
 
-  it("uses epicSpMap value when present and valid", () => {
+  it("always uses story sum regardless of epic estimate", () => {
     const issues = [
       makeIssue("BMO-1", storyFields({ epicKey: "BMO-100", sp: 2 })),
       makeIssue("BMO-2", storyFields({ epicKey: "BMO-100", sp: 3 })),
     ];
     const { epics } = groupStoriesByEpic(issues, { "BMO-100": 20 });
-    expect(parseFloat(epics[0].sp)).toBe(20);
+    expect(parseFloat(epics[0].sp)).toBe(5); // always story sum
+  });
+
+  it("uses story sum when story sum exceeds epic estimate", () => {
+    const issues = [
+      makeIssue("BMO-1", storyFields({ epicKey: "BMO-100", sp: 8 })),
+      makeIssue("BMO-2", storyFields({ epicKey: "BMO-100", sp: 7 })),
+    ];
+    const { epics } = groupStoriesByEpic(issues, { "BMO-100": 10 });
+    expect(parseFloat(epics[0].sp)).toBe(15); // story sum wins
   });
 
   it("ignores epicSpMap value of 0.24 (Jira default SP) and falls back to story sum", () => {
@@ -176,6 +185,58 @@ describe("groupStoriesByEpic", () => {
     ];
     const { epics } = groupStoriesByEpic(issues, { "BMO-100": 0 });
     expect(parseFloat(epics[0].sp)).toBe(4);
+  });
+
+  // ── Fix Version scope ───────────────────────────────────────────────────────
+  it("uses story sum when scopeFixVersion is set and epic fix version differs", () => {
+    // Epic BMO-100 is tagged R1, stories are R1.1 — epic estimate is too broad
+    const issues = [
+      makeIssue("BMO-1", storyFields({ epicKey: "BMO-100", sp: 3 })),
+      makeIssue("BMO-2", storyFields({ epicKey: "BMO-100", sp: 2 })),
+    ];
+    const epicSpMap = { "BMO-100": 50 };
+    const epicFixVersionMap = { "BMO-100": ["R1"] };
+    const { epics } = groupStoriesByEpic(issues, epicSpMap, epicFixVersionMap, "R1.1");
+    expect(parseFloat(epics[0].sp)).toBe(5); // story sum — epic is R1, scope is R1.1
+  });
+
+  it("uses epic estimate when scopeFixVersion matches epic fix version", () => {
+    const issues = [
+      makeIssue("BMO-1", storyFields({ epicKey: "BMO-100", sp: 3 })),
+    ];
+    const epicSpMap = { "BMO-100": 20 };
+    const epicFixVersionMap = { "BMO-100": ["R1.1"] };
+    const { epics } = groupStoriesByEpic(issues, epicSpMap, epicFixVersionMap, "R1.1");
+    expect(parseFloat(epics[0].sp)).toBe(3); // always story sum
+  });
+
+  it("uses story sum when story sum exceeds epic estimate even if scope matches", () => {
+    const issues = [
+      makeIssue("BMO-1", storyFields({ epicKey: "BMO-100", sp: 15 })),
+      makeIssue("BMO-2", storyFields({ epicKey: "BMO-100", sp: 10 })),
+    ];
+    const epicSpMap = { "BMO-100": 20 };
+    const epicFixVersionMap = { "BMO-100": ["R1.1"] };
+    const { epics } = groupStoriesByEpic(issues, epicSpMap, epicFixVersionMap, "R1.1");
+    expect(parseFloat(epics[0].sp)).toBe(25); // story sum wins even though scope matches
+  });
+
+  it("ignores scope rule when scopeFixVersion is empty", () => {
+    const issues = [
+      makeIssue("BMO-1", storyFields({ epicKey: "BMO-100", sp: 3 })),
+    ];
+    const epicSpMap = { "BMO-100": 20 };
+    const epicFixVersionMap = { "BMO-100": ["R1"] };
+    const { epics } = groupStoriesByEpic(issues, epicSpMap, epicFixVersionMap, "");
+    expect(parseFloat(epics[0].sp)).toBe(3); // always story sum
+  });
+
+  it("scope check is case-insensitive", () => {
+    const issues = [makeIssue("BMO-1", storyFields({ epicKey: "BMO-100", sp: 3 }))];
+    const epicSpMap = { "BMO-100": 20 };
+    const epicFixVersionMap = { "BMO-100": ["R1.1"] };
+    const { epics } = groupStoriesByEpic(issues, epicSpMap, epicFixVersionMap, "r1.1");
+    expect(parseFloat(epics[0].sp)).toBe(3); // always story sum
   });
 
   it("sets epic analysisDue to the latest story analysisDue", () => {
@@ -223,11 +284,11 @@ describe("groupStoriesByEpic", () => {
       makeIssue("BMO-1", storyFields({ epicKey: "BMO-A", sp: 2 })),
       makeIssue("BMO-2", storyFields({ epicKey: "BMO-B", sp: 3 })),
     ];
-    const epicSpMap = { "BMO-A": 10, "BMO-B": 0.24 }; // B has default, falls back to sum
+    const epicSpMap = { "BMO-A": 10, "BMO-B": 0.24 };
     const { epics } = groupStoriesByEpic(issues, epicSpMap);
     const a = epics.find(e => e.epicKey === "BMO-A");
     const b = epics.find(e => e.epicKey === "BMO-B");
-    expect(parseFloat(a.sp)).toBe(10);
-    expect(parseFloat(b.sp)).toBe(3); // fallback to story sum
+    expect(parseFloat(a.sp)).toBe(2); // always story sum
+    expect(parseFloat(b.sp)).toBe(3); // always story sum
   });
 });

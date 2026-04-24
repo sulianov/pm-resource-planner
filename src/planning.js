@@ -106,15 +106,20 @@ export function calcSoloBuildDate(ep, perDevVelocityPerDay) {
   return addBizDaysFrom(start, devDaysNeeded);
 }
 
-export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDate, numSprints, startSprintNum }) {
+export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDate, numSprints, startSprintNum, maxDevsPerEpic = 2, sprintLengthDays = 14 }) {
   const sprints = [];
   let cur = new Date(sprintStartDate);
   for (let i = 0; i < numSprints; i++) {
-    const end = addDays(cur, 14);
+    const end = addDays(cur, sprintLengthDays);
     const bizDays = bizDaysBetween(cur, end);
     sprints.push({ idx: i, label: `Sprint ${startSprintNum + i}`, start: new Date(cur), end, bizDays });
     cur = end;
   }
+
+  // Normalise totalDevs: accept a scalar or a per-sprint array
+  const devsPerSprint = Array.isArray(totalDevs)
+    ? sprints.map((_, i) => totalDevs[i] ?? totalDevs[totalDevs.length - 1] ?? 1)
+    : sprints.map(() => totalDevs);
 
   const sorted = [...epics]
     .filter(e => e.sp > 0)
@@ -124,45 +129,50 @@ export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDat
       return da !== db ? da - db : b.sp - a.sp;
     });
 
-  const sprintCapRemaining = sprints.map(s => totalDevs * s.bizDays);
+  const sprintCapRemaining = sprints.map((s, i) => devsPerSprint[i] * s.bizDays);
+  const epicRemaining = sorted.map(e => e.sp / Math.max(perDevVelocityPerDay, 0.01));
+  const epicSegments  = sorted.map(() => []);
 
-  const assigned = sorted.map(epic => {
-    const foundIdx = epic.analysisDue
-      ? sprints.findIndex(s => s.end > epic.analysisDue)
-      : 0;
-    // -1 means analysisDue is beyond all sprints → start past the end so the
-    // while loop never runs and the epic gets the overflow warning.
-    const firstIdx = foundIdx === -1 ? sprints.length : Math.max(0, foundIdx);
+  // Sprint-centric greedy packing: each sprint, iterate all ready epics in
+  // priority order. Freed capacity (due to per-epic cap) is immediately
+  // absorbed by the next epic in the queue.
+  for (let s = 0; s < sprints.length; s++) {
+    const sprint = sprints[s];
+    if (sprintCapRemaining[s] <= 0.001) continue;
 
-    let remaining = epic.sp / Math.max(perDevVelocityPerDay, 0.01);
-    let s = firstIdx;
-    const segments = [];
+    for (let ei = 0; ei < sorted.length; ei++) {
+      if (epicRemaining[ei] <= 0.001) continue;
+      const epic = sorted[ei];
 
-    while (remaining > 0.001 && s < sprints.length) {
-      const sprint = sprints[s];
+      // Epic not yet ready if analysis due is at or beyond this sprint's end
+      if (epic.analysisDue && epic.analysisDue >= sprint.end) continue;
 
       let effectiveBizDays = sprint.bizDays;
       if (epic.analysisDue && epic.analysisDue > sprint.start && epic.analysisDue < sprint.end) {
         effectiveBizDays = bizDaysBetween(epic.analysisDue, sprint.end);
       }
+      if (effectiveBizDays <= 0) continue;
 
-      const effectiveCap = sprintCapRemaining[s] > 0
-        ? Math.min(sprintCapRemaining[s], totalDevs * effectiveBizDays)
-        : 0;
+      // Per-epic concurrency cap (global default, overridable per epic)
+      const epicMaxDevs = (epic.maxDevs != null && epic.maxDevs > 0) ? epic.maxDevs : maxDevsPerEpic;
+      const epicCapDevDays = Math.min(epicMaxDevs, devsPerSprint[s]) * effectiveBizDays;
 
-      if (effectiveCap > 0.001) {
-        const use = Math.min(effectiveCap, remaining);
+      const use = Math.min(sprintCapRemaining[s], epicCapDevDays, epicRemaining[ei]);
+      if (use > 0.001) {
         const devs = Math.max(1, Math.round(use / effectiveBizDays));
-        segments.push({ sprintIdx: s, devDays: use, devs, effectiveBizDays });
+        epicSegments[ei].push({ sprintIdx: s, devDays: use, devs, effectiveBizDays });
         sprintCapRemaining[s] -= use;
-        remaining -= use;
+        epicRemaining[ei]     -= use;
       }
-      s++;
     }
+  }
+
+  const assigned = sorted.map((epic, ei) => {
+    const segments = epicSegments[ei];
 
     let buildComplete = null;
     if (segments.length > 0) {
-      const lastSeg = segments[segments.length - 1];
+      const lastSeg    = segments[segments.length - 1];
       const lastSprint = sprints[lastSeg.sprintIdx];
       const bizDaysOccupied = Math.ceil(lastSeg.devDays / Math.max(lastSeg.devs, 1));
       const effectiveStart =
@@ -172,25 +182,33 @@ export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDat
       buildComplete = addBizDaysFrom(effectiveStart, bizDaysOccupied);
     }
 
-    return {
-      ...epic,
-      segments,
-      buildComplete,
-      warning: remaining > 0.001 ? "Extends beyond sprint range" : null,
-    };
+    let warning = null;
+    if (epicRemaining[ei] > 0.001) {
+      const foundIdx = epic.analysisDue
+        ? sprints.findIndex(s => s.end > epic.analysisDue)
+        : 0;
+      warning = foundIdx === -1
+        ? `Analysis due date is beyond the sprint window (${numSprints} sprints configured)`
+        : "Not enough capacity in the sprint window";
+    }
+
+    return { ...epic, segments, buildComplete, warning };
   });
 
   const sprintStats = sprints.map((sp, i) => {
     const activeEpics = assigned.flatMap(e =>
       (e.segments || []).filter(seg => seg.sprintIdx === i)
-        .map(seg => ({ name: e.name, sp: e.sp, devs: seg.devs, devDays: seg.devDays }))
+        .map(seg => ({ name: e.name, sp: e.sp, devs: sp.bizDays > 0 ? seg.devDays / sp.bizDays : 0, devDays: seg.devDays, analysisDue: e.analysisDue ?? null, pod: e.pod ?? "" }))
     );
-    const devsNeeded = activeEpics.reduce((sum, e) => sum + e.devs, 0);
+    const totalDevDaysUsed = activeEpics.reduce((sum, e) => sum + e.devDays, 0);
+    const devsNeeded = sp.bizDays > 0 ? Math.round(totalDevDaysUsed / sp.bizDays) : 0;
+    const staffed = devsPerSprint[i];
     return {
       ...sp,
       devsNeeded,
-      devsFree: totalDevs - devsNeeded,
-      utilPct: totalDevs > 0 ? Math.round((devsNeeded / totalDevs) * 100) : 0,
+      staffed,
+      devsFree: staffed - devsNeeded,
+      utilPct: staffed > 0 ? Math.round((devsNeeded / staffed) * 100) : 0,
       activeEpics,
     };
   });
