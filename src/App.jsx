@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, Fragment, useEffect } from "react";
 import {
   parseDate, fmtDate, calcSoloBuildDate, runPlan, addBizDaysFrom,
-  calcStoryDates, calcFullFocusDate,
+  calcStoryDates, calcFullFocusDate, bizDaysBetween,
 } from "./planning.js";
 import { fetchStoriesPaginated, fetchIssuesByKeys, updateIssue } from "./jiraService.js";
 import { groupStoriesByEpic, STORY_FIELDS, F_SP, F_DEV_DUE, F_TEST_DUE } from "./epicGrouping.js";
@@ -89,7 +89,26 @@ function UtilBar({ v, max }) {
 // ── Epic Input Tab ────────────────────────────────────────────────────────────
 const mkEpic = () => ({ id: Math.random(), name: "", sp: "", analysisDue: "", maxDevs: "" });
 
-function EpicInputTab({ epics, onChange, assignedEpics, sprints, perDevVelocityPerDay, teamSize, devDueMode, maxDevsPerEpic }) {
+function deriveRisks(epic, assignedEpic, extendedEpic, targetDateStr) {
+  const reasons = [];
+  const target = parseDate(targetDateStr);
+  const sp = parseFloat(epic.sp) || 0;
+  if (!(sp > 0))
+    reasons.push({ code: "NO_SP", label: "Not estimated (0 SP)", sev: "error" });
+  if (!epic.analysisDue)
+    reasons.push({ code: "NO_ANALYSIS_DATE", label: "Missing analysis due date", sev: "warn" });
+  else if (target && epic.analysisDue > target)
+    reasons.push({ code: "ANALYSIS_AFTER_TARGET", label: `Analysis due ${fmtDate(epic.analysisDue)} — after target`, sev: "error" });
+  if (sp > 0 && assignedEpic?.warning)
+    reasons.push({ code: "CAPACITY_GAP", label: assignedEpic.warning, sev: "warn" });
+  if (extendedEpic?.buildComplete && target && extendedEpic.buildComplete > target) {
+    const days = Math.round((extendedEpic.buildComplete.getTime() - target.getTime()) / 86400000);
+    reasons.push({ code: "LATE_BUILD", label: `Projected build ${fmtDate(extendedEpic.buildComplete)} — ${days}d late`, sev: "warn" });
+  }
+  return reasons;
+}
+
+function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprints, extendedSprints, perDevVelocityPerDay, teamSize, devDueMode, maxDevsPerEpic, targetDate }) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -136,15 +155,18 @@ function EpicInputTab({ epics, onChange, assignedEpics, sprints, perDevVelocityP
   function handleCopyCSV() {
     const modeLabel = devDueMode === "solo" ? "Solo" : "Planned";
     const header = ["Epic Name / ID","SP","Max Devs","Analysis Due","Fix Version","Full Focus Dev Due","Full Focus Test Due","Solo Dev Due Date","Planned Dev Due Date",`Test Due Date (${modeLabel})`,"Peak Devs","Sprint(s)","POD","Status"];
+    const allSprints = extendedSprints || sprints;
     const rows = sortedEpics.map(ep => {
-      const calc = buildMap[ep.id];
-      const solo = calcSoloBuildDate(ep, perDevVelocityPerDay);
-      const ff   = calcFullFocusDate(ep, perDevVelocityPerDay, teamSize);
-      const baseDate = calc?.buildComplete;
-      const testDue = baseDate ? fmtDate(addBizDaysFrom(baseDate, 20)) : "";
-      const peakDevs = calc?.segments?.length > 0 ? Math.max(...calc.segments.map(s => s.devs)) : "";
-      const sprintLabels = calc?.segments?.length > 0
-        ? calc.segments.map(s => (sprints[s.sprintIdx]?.label ?? `S${s.sprintIdx}`).replace("Sprint ", "S")).join(", ")
+      const calc    = buildMap[ep.id];
+      const extCalc = extendedBuildMap?.[ep.id];
+      const solo    = calcSoloBuildDate(ep, perDevVelocityPerDay);
+      const ff      = calcFullFocusDate(ep, perDevVelocityPerDay, teamSize);
+      const effectiveSegs  = calc?.segments?.length > 0 ? calc.segments : extCalc?.segments;
+      const effectiveBuild = calc?.buildComplete ?? extCalc?.buildComplete;
+      const testDue     = effectiveBuild ? fmtDate(addBizDaysFrom(effectiveBuild, 20)) : "";
+      const peakDevs    = effectiveSegs?.length > 0 ? Math.max(...effectiveSegs.map(s => s.devs)) : "";
+      const sprintLabels = effectiveSegs?.length > 0
+        ? effectiveSegs.map(s => (allSprints[s.sprintIdx]?.label ?? `S${s.sprintIdx}`).replace("Sprint ", "S")).join(", ")
         : "";
       return [
         ep.name,
@@ -155,7 +177,7 @@ function EpicInputTab({ epics, onChange, assignedEpics, sprints, perDevVelocityP
         ff ? fmtDate(ff) : "",
         ff ? fmtDate(addBizDaysFrom(ff, 20)) : "",
         solo ? fmtDate(solo) : "",
-        calc?.buildComplete ? fmtDate(calc.buildComplete) : "",
+        effectiveBuild ? fmtDate(effectiveBuild) : "",
         testDue,
         peakDevs,
         sprintLabels,
@@ -208,7 +230,7 @@ function EpicInputTab({ epics, onChange, assignedEpics, sprints, perDevVelocityP
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-              {["#","Epic Name / ID","SP","Max Devs ⓘ","Analysis Due","Fix Version","Full Focus ⓘ","Solo Dev Due Date ⓘ","Planned Dev Due Date ↗",`Test Due Date (via ${devDueMode === "solo" ? "Solo ★" : "Planned ★"})`  ,"Devs ⓘ","Sprint(s)","POD","Status",""].map(h => {
+              {["#","Epic Name / ID","SP","Max Devs ⓘ","Analysis Due","Fix Version","Full Focus ⓘ","Solo Dev Due Date ⓘ","Planned Dev Due Date ↗",`Test Due Date (via ${devDueMode === "solo" ? "Solo ★" : "Planned ★"})`  ,"Devs ⓘ","Sprint(s)","POD","Status","Risks",""].map(h => {
                 const isSolo = h === "Solo Dev Due Date ⓘ";
                 const isFF   = h === "Full Focus ⓘ";
                 const isMaxDevs = h === "Max Devs ⓘ";
@@ -270,18 +292,39 @@ function EpicInputTab({ epics, onChange, assignedEpics, sprints, perDevVelocityP
                     {solo ? fmtDate(solo) : "—"}
                   </td>
                   <td style={{ padding: "8px 12px", color: devDueMode === "planned" ? (calc?.warning ? C.accent2 : C.accent) : C.mutedLight, fontWeight: devDueMode === "planned" ? 700 : 400, fontSize: 13, whiteSpace: "nowrap" }}>
-                    {calc?.buildComplete ? fmtDate(calc.buildComplete) : "—"}
+                    {calc?.buildComplete
+                      ? fmtDate(calc.buildComplete)
+                      : extendedBuildMap?.[ep.id]?.buildComplete
+                        ? <span style={{ color: C.accent2 }} title="Projected build date — beyond sprint window">↗ {fmtDate(extendedBuildMap[ep.id].buildComplete)}</span>
+                        : "—"}
                   </td>
                   <td style={{ padding: "8px 12px", color: C.amber, fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>
-                    {calc?.buildComplete ? fmtDate(addBizDaysFrom(calc.buildComplete, 20)) : "—"}
+                    {(() => {
+                      const bd = calc?.buildComplete ?? extendedBuildMap?.[ep.id]?.buildComplete;
+                      const isExt = !calc?.buildComplete && !!bd;
+                      return bd
+                        ? <span style={isExt ? { color: C.accent2 } : {}} title={isExt ? "Derived from projected overflow build date" : undefined}>{fmtDate(addBizDaysFrom(bd, 20))}{isExt ? " ↗" : ""}</span>
+                        : "—";
+                    })()}
                   </td>
                   <td style={{ padding: "8px 12px", color: C.mutedLight, fontSize: 12 }}>
-                    {calc?.segments?.length > 0 ? Math.max(...calc.segments.map(s => s.devs)) : "—"}
+                    {(() => {
+                      const segs = calc?.segments?.length > 0 ? calc.segments : extendedBuildMap?.[ep.id]?.segments;
+                      if (!segs?.length) return "—";
+                      const peak = Math.max(...segs.map(s => s.devs));
+                      const isExt = !calc?.segments?.length;
+                      return <span style={isExt ? { color: C.accent2 } : {}}>{peak}</span>;
+                    })()}
                   </td>
                   <td style={{ padding: "8px 12px", color: C.mutedLight, fontSize: 11, whiteSpace: "nowrap" }}>
-                    {calc?.segments?.length > 0
-                      ? calc.segments.map(s => (sprints[s.sprintIdx]?.label ?? `S${s.sprintIdx}`).replace("Sprint ", "S")).join(", ")
-                      : "—"}
+                    {(() => {
+                      const segs = calc?.segments?.length > 0 ? calc.segments : extendedBuildMap?.[ep.id]?.segments;
+                      const allSprints = extendedSprints || sprints;
+                      if (!segs?.length) return "—";
+                      const isExt = !calc?.segments?.length;
+                      const labels = segs.map(s => (allSprints[s.sprintIdx]?.label ?? `S${s.sprintIdx}`).replace("Sprint ", "S")).join(", ");
+                      return <span style={isExt ? { color: C.accent2 } : {}}>{labels}</span>;
+                    })()}
                   </td>
               <td style={{ padding: "8px 12px", color: C.mutedLight, fontSize: 11, whiteSpace: "nowrap" }}>
                 {ep.pod || "—"}
@@ -292,6 +335,16 @@ function EpicInputTab({ epics, onChange, assignedEpics, sprints, perDevVelocityP
                       : calc?.buildComplete
                         ? <Tag color={devDueMode === "solo" ? C.amber : C.accent}>{devDueMode === "solo" ? "✓ Solo" : "✓ Scheduled"}</Tag>
                         : <Tag color={C.muted}>Pending</Tag>}
+                  </td>
+                  <td style={{ padding: "8px 12px" }}>
+                    {(() => {
+                      const risks = deriveRisks(ep, calc, extendedBuildMap?.[ep.id], targetDate);
+                      if (!risks.length) return <span style={{ color: C.muted, fontSize: 10 }}>—</span>;
+                      const hasError = risks.some(r => r.sev === "error");
+                      const col = hasError ? C.accent2 : C.amber;
+                      const tip = risks.map(r => `${r.sev === "error" ? "✕" : "⚠"} ${r.label}`).join("\n");
+                      return <span title={tip} style={{ color: col, fontSize: 11, cursor: "help", fontWeight: 700 }}>● {risks.length}</span>;
+                    })()}
                   </td>
                   <td style={{ padding: "4px 8px" }}>
                     <button onClick={() => removeRow(ep.id)} style={{
@@ -314,29 +367,41 @@ function EpicInputTab({ epics, onChange, assignedEpics, sprints, perDevVelocityP
 }
 
 // ── Sprint Demand (combined Demand Table + Epic Breakdown) ────────────────────
-function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrides, onStaffingChange, onEpicClick }) {
+function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrides, onStaffingChange, onEpicClick, perDevVelocityPerDay, overflowSprintStats = [], targetDate, numSprints = 0 }) {
   const [openSet, setOpenSet] = useState(new Set());
   const [copied, setCopied] = useState(false);
 
-  function toggle(i) {
-    setOpenSet(prev => {
-      const next = new Set(prev);
-      next.has(i) ? next.delete(i) : next.add(i);
-      return next;
-    });
+  function toggle(key) {
+    setOpenSet(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   }
-  function expandAll()  { setOpenSet(new Set(sprintStats.map((_, i) => i))); }
+  function expandAll() {
+    setOpenSet(new Set([...sprintStats.map((_, i) => i), ...overflowSprintStats.map((_, i) => `o${i}`)]));
+  }
   function collapseAll() { setOpenSet(new Set()); }
 
+  // Epic names that spill into overflow sprints (for ↗ late badge in main table)
+  const overflowEpicNames = useMemo(
+    () => new Set(overflowSprintStats.flatMap(s => s.activeEpics.map(e => e.name))),
+    [overflowSprintStats]);
+  // Overflow summary: unique epics + total SP
+  const overflowEpicMap = useMemo(() => {
+    const m = {};
+    overflowSprintStats.forEach(s => s.activeEpics.forEach(e => { m[e.name] = e.sp; }));
+    return m;
+  }, [overflowSprintStats]);
+  const overflowEpicCount = Object.keys(overflowEpicMap).length;
+  const overflowTotalSP   = Object.values(overflowEpicMap).reduce((a, b) => a + (b || 0), 0);
+
   function copyCSV() {
-    const headers = ["Sprint","Start","End","Biz Days","Min Req","Staffed","Gap","Epic","Epic SP","Analysis Due","Devs (this sprint)","Dev-days (this sprint)"];
+    const headers = ["Sprint","Start","End","Biz Days","SP","Min Req","Staffed","Gap","Epic","Epic SP","Analysis Due","Devs (this sprint)","Dev-days (this sprint)"];
     const rows = [];
     sprintStats.forEach((s, i) => {
+      const sprintSP = Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0));
       const minReq  = uncappedStats?.[i]?.devsNeeded ?? 0;
       const staffed = staffingOverrides[i] ?? teamSize;
       const gap     = staffed - minReq;
       if (s.activeEpics.length === 0) {
-        rows.push([s.label, fmtDate(s.start), fmtDate(s.end), s.bizDays, minReq, staffed, gap, "", "", "", "", ""]);
+        rows.push([s.label, fmtDate(s.start), fmtDate(s.end), s.bizDays, sprintSP, minReq, staffed, gap, "", "", "", "", ""]);
       } else {
         s.activeEpics.forEach((e, ei) => {
           rows.push([
@@ -344,6 +409,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
             ei === 0 ? fmtDate(s.start) : "",
             ei === 0 ? fmtDate(s.end) : "",
             ei === 0 ? s.bizDays : "",
+            ei === 0 ? sprintSP : "",
             ei === 0 ? minReq : "",
             ei === 0 ? staffed : "",
             ei === 0 ? gap : "",
@@ -352,6 +418,33 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
         });
       }
     });
+    if (overflowSprintStats.length > 0) {
+      rows.push([`--- BEYOND TARGET${targetDate ? ` (${targetDate})` : ""} ---`, "", "", "", "", "", "", "", "", "", "", "", ""]);
+      overflowSprintStats.forEach((s, oi) => {
+        const sprintSP    = Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0));
+        const overflowIdx = numSprints + oi;
+        const oMinReq     = s.devsNeeded ?? 0;
+        const oStaffed    = staffingOverrides[overflowIdx] ?? teamSize;
+        const oGap        = oStaffed - oMinReq;
+        if (s.activeEpics.length === 0) {
+          rows.push([s.label, fmtDate(s.start), fmtDate(s.end), s.bizDays, sprintSP, oMinReq, oStaffed, oGap, "", "", "", "", ""]);
+        } else {
+          s.activeEpics.forEach((e, ei) => {
+            rows.push([
+              ei === 0 ? s.label : "",
+              ei === 0 ? fmtDate(s.start) : "",
+              ei === 0 ? fmtDate(s.end) : "",
+              ei === 0 ? s.bizDays : "",
+              ei === 0 ? sprintSP : "",
+              ei === 0 ? oMinReq : "",
+              ei === 0 ? oStaffed : "",
+              ei === 0 ? oGap : "",
+              e.name, e.sp, e.analysisDue ? fmtDate(e.analysisDue) : "", e.devs.toFixed(1), e.devDays.toFixed(1),
+            ]);
+          });
+        }
+      });
+    }
     const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
     navigator.clipboard.writeText(csv).then(() => {
       setCopied(true);
@@ -359,7 +452,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
     });
   }
 
-  const allOpen = openSet.size === sprintStats.length;
+  const allOpen = openSet.size === sprintStats.length + overflowSprintStats.length;
 
   return (
     <div>
@@ -380,14 +473,20 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-            {["Sprint","Start","End","Biz Days","Min Req ⓘ","Staffed ⓘ","Gap",""].map((h, i) => (
-              <th key={i} title={h === "Min Req ⓘ" ? "Minimum devs needed to avoid slippage (uncapped plan)" : h === "Staffed ⓘ" ? "Your planned headcount per sprint — edit inline" : undefined} style={{ padding: "9px 14px", textAlign: i === 7 ? "center" : "left", color: C.muted, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 500, whiteSpace: "nowrap", cursor: h.endsWith("ⓘ") ? "help" : "default" }}>{h}</th>
+            {["Sprint","Start","End","Biz Days","SP ⓘ","Min Req ⓘ","Staffed ⓘ","Gap ⓘ",""].map((h, i) => (
+              <th key={i} title={
+                h === "SP ⓘ" ? "Story points of work in progress this sprint (sum of dev-days × velocity)" :
+                h === "Min Req ⓘ" ? `Minimum devs needed to avoid slippage (uncapped plan). Beyond the target date${targetDate ? ` (${targetDate})` : ""} these are the devs needed to complete overflow work.` :
+                h === "Staffed ⓘ" ? "Your planned headcount per sprint — edit inline. Applies to both in-target and overflow sprints." :
+                h === "Gap ⓘ" ? `Staffed minus Min Req — negative means shortfall. SP equivalent shown in brackets. For overflow sprints this shows extra demand needed beyond target date${targetDate ? ` (${targetDate})` : ""}.` : undefined
+              } style={{ padding: "9px 14px", textAlign: i === 8 ? "center" : "left", color: C.muted, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 500, whiteSpace: "nowrap", cursor: h.endsWith("ⓘ") ? "help" : "default" }}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {sprintStats.map((s, i) => {
             const isOpen = openSet.has(i);
+            const sprintSP = Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0));
             return (
               <Fragment key={i}>
                 <tr
@@ -398,6 +497,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
                   <td style={{ padding: "9px 14px", color: C.muted, whiteSpace: "nowrap" }}>{fmtDate(s.start)}</td>
                   <td style={{ padding: "9px 14px", color: C.muted, whiteSpace: "nowrap" }}>{fmtDate(s.end)}</td>
                   <td style={{ padding: "9px 14px", color: C.mutedLight }}>{s.bizDays}</td>
+                  <td style={{ padding: "9px 14px", color: C.mutedLight, fontWeight: 600 }} title={`${sprintSP} SP in progress this sprint`}>{sprintSP > 0 ? sprintSP : "—"}</td>
                   {(() => {
                     const minReq  = uncappedStats?.[i]?.devsNeeded ?? 0;
                     const staffed = staffingOverrides[i] ?? teamSize;
@@ -410,7 +510,13 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
                           style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 7px", fontSize: 13, width: 56, fontFamily: "inherit", outline: "none" }} />
                       </td>
                       <td style={{ padding: "9px 14px", color: gap < 0 ? C.accent2 : gap === 0 ? C.mutedLight : C.accent, fontWeight: 700 }}>
-                        {gap > 0 ? `+${gap}` : gap}
+                        {(() => {
+                          const spPerDev = (perDevVelocityPerDay || 0) * (s.bizDays || 0);
+                          const spGap = Math.round(gap * spPerDev);
+                          const gapStr = gap > 0 ? `+${gap}` : String(gap);
+                          const spStr  = spGap > 0 ? `+${spGap}` : String(spGap);
+                          return <span title={`${gapStr} devs · ${spStr} SP equivalent`}>{gapStr}{spGap !== 0 && <span style={{ color: C.mutedLight, fontSize: 10, marginLeft: 4 }}>({spStr} SP)</span>}</span>;
+                        })()}
                       </td>
                     </>;
                   })()}
@@ -423,7 +529,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
                 </tr>
                 {isOpen && (
                   <tr style={{ background: C.bg }}>
-                    <td colSpan={8} style={{ padding: "0 0 6px 36px", borderBottom: `1px solid ${C.border}44` }}>
+                    <td colSpan={9} style={{ padding: "0 0 6px 36px", borderBottom: `1px solid ${C.border}44` }}>
                       {s.activeEpics.length === 0
                         ? <span style={{ color: C.muted, fontSize: 12, display: "block", padding: "10px 0" }}>No epics active this sprint.</span>
                         : (
@@ -434,19 +540,23 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
                               ))}</tr>
                             </thead>
                             <tbody>
-                              {s.activeEpics.map((e, ei) => (
-                                <tr key={ei} style={{ borderTop: `1px solid ${C.border}22` }}>
-                                  <td style={{ padding: "6px 10px", color: C.text }}>
-                                    {onEpicClick
-                                      ? <button onClick={() => onEpicClick(e.name)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline dotted" }} title="Open in Write-back">{e.name}</button>
-                                      : e.name}
-                                  </td>
-                                  <td style={{ padding: "6px 10px", color: C.muted }}>{(Math.ceil(parseFloat(e.sp || 0) * 100) / 100).toFixed(2)}</td>
-                                  <td style={{ padding: "6px 10px", color: C.amber, whiteSpace: "nowrap" }}>{e.analysisDue ? fmtDate(e.analysisDue) : "—"}</td>
-                                  <td style={{ padding: "6px 10px", color: C.accent, fontWeight: 700 }}>{e.devs.toFixed(1)}</td>
-                                  <td style={{ padding: "6px 10px", color: C.mutedLight }}>{e.devDays.toFixed(1)}</td>
-                                </tr>
-                              ))}
+                              {s.activeEpics.map((e, ei) => {
+                                const isLate = overflowEpicNames.has(e.name);
+                                return (
+                                  <tr key={ei} style={{ borderTop: `1px solid ${C.border}22`, background: isLate ? C.accent2 + "0d" : undefined }}>
+                                    <td style={{ padding: "6px 10px", color: C.text }}>
+                                      {onEpicClick
+                                        ? <button onClick={() => onEpicClick(e.name)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline dotted" }} title="Open in Write-back">{e.name}</button>
+                                        : e.name}
+                                      {isLate && <span style={{ marginLeft: 6, color: C.accent2, fontSize: 10 }} title="This epic extends beyond the target date">↗ late</span>}
+                                    </td>
+                                    <td style={{ padding: "6px 10px", color: C.muted }}>{(Math.ceil(parseFloat(e.sp || 0) * 100) / 100).toFixed(2)}</td>
+                                    <td style={{ padding: "6px 10px", color: C.amber, whiteSpace: "nowrap" }}>{e.analysisDue ? fmtDate(e.analysisDue) : "—"}</td>
+                                    <td style={{ padding: "6px 10px", color: C.accent, fontWeight: 700 }}>{e.devs.toFixed(1)}</td>
+                                    <td style={{ padding: "6px 10px", color: C.mutedLight }}>{e.devDays.toFixed(1)}</td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         )}
@@ -456,6 +566,114 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
               </Fragment>
             );
           })}
+
+          {/* ── Target date divider ──────────────────────────────────────── */}
+          {overflowSprintStats.length > 0 && (
+            <tr>
+              <td colSpan={9} style={{ padding: "10px 14px", borderTop: `2px dashed ${C.accent2}55`, borderBottom: `2px dashed ${C.accent2}55`, background: C.accent2 + "0a", textAlign: "center" }}>
+                <span style={{ color: C.accent2, fontSize: 10, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase" }}>
+                  ── TARGET DATE{targetDate ? ` (${targetDate})` : ""} ──
+                </span>
+              </td>
+            </tr>
+          )}
+
+          {/* ── Overflow sprints ─────────────────────────────────────────── */}
+          {overflowSprintStats.map((s, oi) => {
+            const key = `o${oi}`;
+            const isOpen = openSet.has(key);
+            const overflowIdx = numSprints + oi;
+            const minReq  = s.devsNeeded ?? 0;
+            const staffed = staffingOverrides[overflowIdx] ?? teamSize;
+            const gap     = staffed - minReq;
+            const daysAfterTarget = (() => {
+              if (!targetDate) return null;
+              const t = parseDate(targetDate);
+              if (!t || !s.start) return null;
+              return Math.max(0, Math.round((s.start.getTime() - t.getTime()) / 86400000));
+            })();
+            return (
+              <Fragment key={key}>
+                <tr
+                  onClick={() => toggle(key)}
+                  style={{ borderBottom: `1px solid ${C.accent2}22`, background: C.accent2 + "10", cursor: "pointer" }}
+                >
+                  <td style={{ padding: "9px 14px", fontWeight: 600, whiteSpace: "nowrap" }}>
+                    <span style={{ color: C.accent2 }}>{s.label}</span>
+                    <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: C.accent2, opacity: 0.75 }}>⚠ BEYOND TARGET</span>
+                    {daysAfterTarget !== null && <span style={{ marginLeft: 6, fontSize: 9, color: C.muted }}>+{daysAfterTarget}d</span>}
+                  </td>
+                  <td style={{ padding: "9px 14px", color: C.muted, whiteSpace: "nowrap" }}>{fmtDate(s.start)}</td>
+                  <td style={{ padding: "9px 14px", color: C.muted, whiteSpace: "nowrap" }}>{fmtDate(s.end)}</td>
+                  <td style={{ padding: "9px 14px", color: C.mutedLight }}>{s.bizDays}</td>
+                  <td style={{ padding: "9px 14px", color: C.amber, fontWeight: 600 }} title={`${Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0))} SP in progress this overflow sprint`}>
+                    {(() => { const sp = Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0)); return sp > 0 ? sp : "—"; })()}
+                  </td>
+                  <td style={{ padding: "9px 14px", color: C.amber, fontWeight: 700, fontSize: 15 }} title="Devs needed to complete overflow work in this sprint">{minReq}</td>
+                  <td style={{ padding: "4px 8px" }} onClick={e => e.stopPropagation()}>
+                    <input type="number" min={0} value={staffed}
+                      onChange={e => onStaffingChange(overflowIdx, Math.max(0, Number(e.target.value)))}
+                      style={{ background: C.bg, color: C.text, border: `1px solid ${C.accent2}55`, borderRadius: 4, padding: "3px 7px", fontSize: 13, width: 56, fontFamily: "inherit", outline: "none" }} />
+                  </td>
+                  <td style={{ padding: "9px 14px", color: gap < 0 ? C.accent2 : gap === 0 ? C.mutedLight : C.amber, fontWeight: 700 }} title="Staffed minus Min Req for overflow work">
+                    {(() => {
+                      const spPerDev = (perDevVelocityPerDay || 0) * (s.bizDays || 0);
+                      const spGap = Math.round(gap * spPerDev);
+                      const gapStr = gap > 0 ? `+${gap}` : String(gap);
+                      const spStr  = spGap > 0 ? `+${spGap}` : String(spGap);
+                      return <span title={`${gapStr} devs · ${spStr} SP equivalent (overflow sprint)`}>{gapStr}{spGap !== 0 && <span style={{ color: C.mutedLight, fontSize: 10, marginLeft: 4 }}>({spStr} SP)</span>}</span>;
+                    })()}
+                  </td>
+                  <td style={{ padding: "9px 14px", textAlign: "center", fontSize: 11 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 5, justifyContent: "center" }}>
+                      <span style={{ color: C.muted, fontSize: 10 }}>{s.activeEpics.length} epic{s.activeEpics.length !== 1 ? "s" : ""}</span>
+                      <span style={{ color: C.accent2 }}>{isOpen ? "▲" : "▼"}</span>
+                    </span>
+                  </td>
+                </tr>
+                {isOpen && (
+                  <tr style={{ background: C.accent2 + "06" }}>
+                    <td colSpan={9} style={{ padding: "0 0 6px 36px", borderBottom: `1px solid ${C.accent2}33` }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 4 }}>
+                        <thead>
+                          <tr>{["Epic","Total SP","Analysis Due","Devs this sprint","Dev-days"].map(h => (
+                            <th key={h} style={{ textAlign: "left", color: C.muted, padding: "4px 10px", fontWeight: 500, fontSize: 10, letterSpacing: "0.08em" }}>{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody>
+                          {s.activeEpics.map((e, ei) => (
+                            <tr key={ei} style={{ borderTop: `1px solid ${C.border}22`, background: C.accent2 + "08" }}>
+                              <td style={{ padding: "6px 10px", color: C.text }}>
+                                {onEpicClick
+                                  ? <button onClick={() => onEpicClick(e.name)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline dotted" }} title="Open in Write-back">{e.name}</button>
+                                  : e.name}
+                                <span style={{ marginLeft: 6, color: C.accent2, fontSize: 10 }}>↗ overflow</span>
+                              </td>
+                              <td style={{ padding: "6px 10px", color: C.muted }}>{(Math.ceil(parseFloat(e.sp || 0) * 100) / 100).toFixed(2)}</td>
+                              <td style={{ padding: "6px 10px", color: C.amber, whiteSpace: "nowrap" }}>{e.analysisDue ? fmtDate(e.analysisDue) : "—"}</td>
+                              <td style={{ padding: "6px 10px", color: C.accent, fontWeight: 700 }}>{e.devs.toFixed(1)}</td>
+                              <td style={{ padding: "6px 10px", color: C.mutedLight }}>{e.devDays.toFixed(1)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+
+          {/* ── Overflow summary ─────────────────────────────────────────── */}
+          {overflowEpicCount > 0 && (
+            <tr>
+              <td colSpan={9} style={{ padding: "10px 14px", borderTop: `1px solid ${C.accent2}44`, background: C.accent2 + "08", textAlign: "right" }}>
+                <span style={{ color: C.accent2, fontSize: 11, fontWeight: 600 }}>
+                  {overflowEpicCount} epic{overflowEpicCount !== 1 ? "s" : ""} · {overflowTotalSP.toFixed(1)} SP scheduled beyond target date
+                </span>
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
@@ -508,11 +726,35 @@ function UtilChart({ sprintStats, teamSize }) {
 }
 
 // ── Gantt ─────────────────────────────────────────────────────────────────────
-function GanttView({ assignedEpics, sprints }) {
+function GanttView({ assignedEpics, sprints, extendedBuildMap, targetDate, extendedSprints }) {
   const colors = [C.accent,"#7c3aed","#ec4899",C.amber,C.accent2,"#06b6d4","#84cc16","#f97316","#a78bfa","#34d399"];
   if (!sprints.length || !assignedEpics.length) return <div style={{ color: C.muted, padding: "48px 0", textAlign: "center" }}>No data.</div>;
-  const usedIndices = new Set(assignedEpics.flatMap(e => (e.segments || []).map(s => s.sprintIdx)));
-  const visibleSprints = sprints.map((s, i) => ({ ...s, origIdx: i })).filter(s => usedIndices.has(s.origIdx));
+
+  // For overflow epics use extended plan segments; use extendedSprints for column lookup
+  const allSprints = extendedSprints || sprints;
+  const usedIndices = new Set();
+  assignedEpics.forEach(ep => {
+    const segs = (ep.warning && extendedBuildMap?.[ep.id]?.segments?.length)
+      ? extendedBuildMap[ep.id].segments
+      : (ep.segments || []);
+    segs.forEach(s => usedIndices.add(s.sprintIdx));
+  });
+  const visibleSprints = allSprints.map((s, i) => ({ ...s, origIdx: i })).filter(s => usedIndices.has(s.origIdx));
+
+  // Identify the sprint column that contains (or immediately follows) the target date
+  const targetDateObj = targetDate ? parseDate(targetDate) : null;
+  let targetColOrigIdx = -1;
+  if (targetDateObj) {
+    const t = targetDateObj.getTime();
+    for (const s of visibleSprints) {
+      if (s.start.getTime() <= t && t <= s.end.getTime()) { targetColOrigIdx = s.origIdx; break; }
+    }
+    if (targetColOrigIdx === -1) {
+      const after = visibleSprints.find(s => s.start.getTime() > t);
+      if (after) targetColOrigIdx = after.origIdx;
+    }
+  }
+
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
@@ -521,32 +763,54 @@ function GanttView({ assignedEpics, sprints }) {
             <th style={{ padding: "6px 12px", textAlign: "left", color: C.muted, minWidth: 220, position: "sticky", left: 0, background: C.surface, zIndex: 2 }}>Epic</th>
             <th style={{ padding: "6px 10px", color: C.muted, minWidth: 50, textAlign: "center" }}>SP</th>
             <th style={{ padding: "6px 10px", color: C.muted, minWidth: 110, textAlign: "left", whiteSpace: "nowrap" }}>Build Complete</th>
-            {visibleSprints.map(s => (
-              <th key={s.origIdx} style={{ padding: "4px 2px", color: C.muted, minWidth: 38, textAlign: "center" }}>
-                <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", height: 66, fontSize: 9 }}>{s.label}</div>
-              </th>
-            ))}
+            {visibleSprints.map(s => {
+              const isTarget = s.origIdx === targetColOrigIdx;
+              return (
+                <th key={s.origIdx} style={{ padding: "4px 2px", color: isTarget ? C.accent2 : C.muted, minWidth: 38, textAlign: "center", borderLeft: isTarget ? `2px solid ${C.accent2}99` : undefined }}>
+                  <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", height: 66, fontSize: 9 }}>
+                    {isTarget && <span style={{ display: "block", marginBottom: 2, fontSize: 8 }}>◄ target</span>}
+                    {s.label}
+                  </div>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
           {assignedEpics.map((ep, ri) => {
             const color = colors[ri % colors.length];
+            const isOverflow = !!ep.warning;
+            const effectiveSegs = (isOverflow && extendedBuildMap?.[ep.id]?.segments?.length)
+              ? extendedBuildMap[ep.id].segments
+              : (ep.segments || []);
+            const effectiveBuild = (isOverflow && extendedBuildMap?.[ep.id]?.buildComplete)
+              ? extendedBuildMap[ep.id].buildComplete
+              : ep.buildComplete;
             const segMap = {};
-            (ep.segments || []).forEach(seg => { segMap[seg.sprintIdx] = seg; });
+            effectiveSegs.forEach(seg => { segMap[seg.sprintIdx] = seg; });
             return (
-              <tr key={ep.id} style={{ borderBottom: `1px solid ${C.border}22` }}>
-                <td style={{ padding: "6px 12px", color: C.text, position: "sticky", left: 0, background: C.surface, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ep.name}>{ep.name || `Epic ${ri + 1}`}</td>
+              <tr key={ep.id} style={{ borderBottom: `1px solid ${C.border}22`, opacity: isOverflow ? 0.65 : 1 }}>
+                <td style={{ padding: "6px 12px", color: isOverflow ? C.muted : C.text, position: "sticky", left: 0, background: C.surface, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={ep.name}>
+                  {ep.name || `Epic ${ri + 1}`}
+                  {isOverflow && <span style={{ marginLeft: 6, color: C.accent2, fontSize: 9 }}>↑ overflow</span>}
+                </td>
                 <td style={{ padding: "6px 10px", color: C.muted, textAlign: "center" }}>{(parseFloat(ep.sp)||0).toFixed(2)}</td>
-                <td style={{ padding: "6px 10px", color: ep.warning ? C.accent2 : C.accent, fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(ep.buildComplete)}</td>
+                <td style={{ padding: "6px 10px", color: isOverflow ? C.accent2 : C.accent, fontWeight: 600, fontSize: 11, whiteSpace: "nowrap", fontStyle: isOverflow ? "italic" : "normal" }}>
+                  {effectiveBuild ? fmtDate(effectiveBuild) : "—"}
+                  {isOverflow && effectiveBuild && <span style={{ marginLeft: 4, fontSize: 9 }}>↗</span>}
+                </td>
                 {visibleSprints.map(s => {
                   const seg = segMap[s.origIdx];
+                  const isTarget = s.origIdx === targetColOrigIdx;
                   return (
-                    <td key={s.origIdx} style={{ padding: "3px 2px", textAlign: "center" }}>
+                    <td key={s.origIdx} style={{ padding: "3px 2px", textAlign: "center", borderLeft: isTarget ? `2px solid ${C.accent2}99` : undefined, background: isTarget ? C.accent2 + "09" : undefined }}>
                       {seg ? (
                         <div title={`${seg.devs} dev(s) · ${seg.devDays.toFixed(1)} dev-days`} style={{
-                          background: color, borderRadius: 3, height: 22, minWidth: 34,
+                          background: isOverflow ? "transparent" : color,
+                          border: isOverflow ? `1.5px dashed ${color}` : "none",
+                          borderRadius: 3, height: 22, minWidth: 34,
                           display: "flex", alignItems: "center", justifyContent: "center",
-                          fontSize: 9, color: "#000", fontWeight: 700,
+                          fontSize: 9, color: isOverflow ? color : "#000", fontWeight: 700,
                         }}>{seg.devs}d</div>
                       ) : null}
                     </td>
@@ -1041,9 +1305,44 @@ export default function App() {
   const assignedEpics  = devDueMode === "solo" ? soloAssignedEpics  : teamAssignedEpics;
   const sprints        = devDueMode === "solo" ? soloSprints        : teamSprints;
 
+  // Extended plan: 3× horizon + 12 sprints — used for projected build dates beyond the window
+  const extendedNumSprints = numSprints * 3 + 12;
+  const { assignedEpics: extendedAssignedEpics, sprintStats: extendedSprintStats, sprints: extendedSprints } = useMemo(() => {
+    const extDevsArray = Array.from({ length: extendedNumSprints }, (_, i) => staffingOverrides[i] ?? teamSize);
+    return runPlan({
+      epics: parsedEpics, perDevVelocityPerDay,
+      totalDevs: devDueMode === "solo" ? 1 : extDevsArray,
+      sprintStartDate: parseDate(sprintStart) || new Date("2026-02-16"),
+      numSprints: extendedNumSprints, startSprintNum,
+      maxDevsPerEpic: devDueMode === "solo" ? 1 : maxDevsPerEpic,
+      sprintLengthDays,
+    });
+  }, [parsedEpics, perDevVelocityPerDay, devDueMode, staffingOverrides, teamSize, sprintStart, extendedNumSprints, startSprintNum, maxDevsPerEpic, sprintLengthDays]);
+  const extendedBuildMap = useMemo(() => {
+    const m = {};
+    extendedAssignedEpics.forEach(e => { m[e.id] = e; });
+    return m;
+  }, [extendedAssignedEpics]);
+  // Overflow sprints = extended plan sprints beyond the main window that have active epics
+  const overflowSprintStats = useMemo(() =>
+    extendedSprintStats.slice(numSprints).filter(s => s.activeEpics.length > 0),
+    [extendedSprintStats, numSprints]);
+
   const totalSP = parsedEpics.reduce((a, e) => a + e.sp, 0);
   const scheduled = assignedEpics.filter(e => e.buildComplete && !e.warning).length;
-  const warnings = assignedEpics.filter(e => e.warning).length;
+  const warnings  = assignedEpics.filter(e => e.warning).length;
+
+  // Scope risk metrics
+  const overflowSP = useMemo(() =>
+    assignedEpics.filter(e => e.warning).reduce((s, e) => s + (e.sp || 0), 0),
+    [assignedEpics]);
+  const targetDateObj = useMemo(() => parseDate(targetDate), [targetDate]);
+  const remainingBizDays = useMemo(() => {
+    const start = parseDate(sprintStart) || new Date();
+    return targetDateObj ? bizDaysBetween(start, targetDateObj) : 0;
+  }, [sprintStart, targetDateObj]);
+  const devsNeededToClose = (overflowSP > 0 && remainingBizDays > 0 && perDevVelocityPerDay > 0)
+    ? overflowSP / (perDevVelocityPerDay * remainingBizDays) : 0;
 
   return (
     <div style={{ background: C.bg, minHeight: "100vh", color: C.text, fontFamily: "'DM Mono','Fira Code',monospace", fontSize: 14 }}>
@@ -1077,6 +1376,16 @@ export default function App() {
           ))}
         </div>
       </div>
+
+      {/* Scope risk banner */}
+      {overflowSP > 0 && (
+        <div style={{ background: C.accent2 + "18", borderBottom: `1px solid ${C.accent2}44`, padding: "7px 28px", display: "flex", alignItems: "center", gap: 20, fontSize: 11 }}>
+          <span style={{ color: C.accent2, fontWeight: 700, letterSpacing: "0.06em" }}>⚠ SCOPE RISK</span>
+          <span style={{ color: C.muted }}>{warnings} epic{warnings !== 1 ? "s" : ""} overflow the sprint window</span>
+          <span style={{ color: C.accent2, fontWeight: 600 }}>{overflowSP.toFixed(1)} SP at risk</span>
+          {devsNeededToClose > 0 && <span style={{ color: C.amber }}>≈ {devsNeededToClose.toFixed(1)} additional devs needed to close by target</span>}
+        </div>
+      )}
 
       <div style={{ display: "flex", minHeight: "calc(100vh - 68px)" }}>
         {/* Sidebar */}
@@ -1170,7 +1479,7 @@ export default function App() {
             onChange={setActiveTab}
           />
           <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto", overflowX: "auto" }}>
-            {activeTab === "Epic Input" && <EpicInputTab epics={epicRows} onChange={setEpicRows} assignedEpics={assignedEpics} sprints={sprints} perDevVelocityPerDay={perDevVelocityPerDay} teamSize={teamSize} devDueMode={devDueMode} maxDevsPerEpic={maxDevsPerEpic} />}
+            {activeTab === "Epic Input" && <EpicInputTab epics={epicRows} onChange={setEpicRows} assignedEpics={assignedEpics} extendedBuildMap={extendedBuildMap} sprints={sprints} extendedSprints={extendedSprints} perDevVelocityPerDay={perDevVelocityPerDay} teamSize={teamSize} devDueMode={devDueMode} maxDevsPerEpic={maxDevsPerEpic} targetDate={targetDate} />}
             {activeTab === "Jira Import" && (
               <JiraImportTab
                 jiraBase={jiraBase} setJiraBase={setJiraBase}
@@ -1191,9 +1500,9 @@ export default function App() {
                 focusEpicKey={writebackFocusKey}
               />
             )}
-            {activeTab === "Sprint Demand" && <SprintDemandTab sprintStats={sprintStats} uncappedStats={uncappedStats} teamSize={teamSize} staffingOverrides={staffingOverrides} onStaffingChange={(i, v) => setStaffingOverrides(prev => ({ ...prev, [i]: v }))} onEpicClick={epicKey => { setWritebackFocusKey(epicKey); setActiveTab("Write-back"); }} />}
+            {activeTab === "Sprint Demand" && <SprintDemandTab sprintStats={sprintStats} uncappedStats={uncappedStats} teamSize={teamSize} staffingOverrides={staffingOverrides} onStaffingChange={(i, v) => setStaffingOverrides(prev => ({ ...prev, [i]: v }))} onEpicClick={epicKey => { setWritebackFocusKey(epicKey); setActiveTab("Write-back"); }} perDevVelocityPerDay={perDevVelocityPerDay} overflowSprintStats={overflowSprintStats} targetDate={targetDate} numSprints={numSprints} />}
             {activeTab === "Utilisation Chart" && <UtilChart sprintStats={sprintStats} teamSize={teamSize} />}
-            {activeTab === "Gantt" && <GanttView assignedEpics={assignedEpics} sprints={sprints} />}
+            {activeTab === "Gantt" && <GanttView assignedEpics={assignedEpics} sprints={sprints} extendedBuildMap={extendedBuildMap} targetDate={targetDate} extendedSprints={extendedSprints} />}
           </div>
         </div>
       </div>

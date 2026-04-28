@@ -121,6 +121,7 @@ export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDat
     ? sprints.map((_, i) => totalDevs[i] ?? totalDevs[totalDevs.length - 1] ?? 1)
     : sprints.map(() => totalDevs);
 
+  const unschedulable = [...epics].filter(e => !(e.sp > 0));
   const sorted = [...epics]
     .filter(e => e.sp > 0)
     .sort((a, b) => {
@@ -167,7 +168,7 @@ export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDat
     }
   }
 
-  const assigned = sorted.map((epic, ei) => {
+  const scheduledAssigned = sorted.map((epic, ei) => {
     const segments = epicSegments[ei];
 
     let buildComplete = null;
@@ -194,6 +195,11 @@ export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDat
 
     return { ...epic, segments, buildComplete, warning };
   });
+
+  const assigned = [
+    ...scheduledAssigned,
+    ...unschedulable.map(epic => ({ ...epic, segments: [], buildComplete: null, warning: "Not estimated (0 SP)" })),
+  ];
 
   const sprintStats = sprints.map((sp, i) => {
     const activeEpics = assigned.flatMap(e =>
