@@ -63,20 +63,28 @@ export async function fetchIssuesByKeys({ base, token, keys, fields, signal }) {
 /**
  * Update a Jira issue's fields via local proxy (PUT under the hood).
  * fields: { "customfield_10305": "2026-06-10", ... }
+ * Retries up to `retries` times on HTTP 429 with exponential back-off.
  */
-export async function updateIssue({ base, token, key, fields }) {
-  const res = await fetch(`${PROXY_BASE}/api/jira/update`, {
-    method: "POST",
-    headers: {
-      "Content-Type":  "application/json",
-      "Authorization": `Bearer ${token}`,
-      "X-Jira-Base":   base,
-    },
-    body: JSON.stringify({ key, fields }),
-  });
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e.errorMessages?.join(", ") || e.message || `HTTP ${res.status}`);
+export async function updateIssue({ base, token, key, fields }, retries = 3) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(`${PROXY_BASE}/api/jira/update`, {
+      method: "POST",
+      headers: {
+        "Content-Type":  "application/json",
+        "Authorization": `Bearer ${token}`,
+        "X-Jira-Base":   base,
+      },
+      body: JSON.stringify({ key, fields }),
+    });
+    if (res.status === 429 && attempt < retries) {
+      await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
+      continue;
+    }
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.errorMessages?.join(", ") || e.message || `HTTP ${res.status}`);
+    }
+    return res.status;
   }
-  return res.status;
+  throw new Error(`HTTP 429: rate limited after ${retries} retries for ${key}`);
 }

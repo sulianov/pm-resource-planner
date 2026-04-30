@@ -161,8 +161,8 @@ function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprint
       const extCalc = extendedBuildMap?.[ep.id];
       const solo    = calcSoloBuildDate(ep, perDevVelocityPerDay);
       const ff      = calcFullFocusDate(ep, perDevVelocityPerDay, teamSize);
-      const effectiveSegs  = calc?.segments?.length > 0 ? calc.segments : extCalc?.segments;
-      const effectiveBuild = calc?.buildComplete ?? extCalc?.buildComplete;
+      const effectiveSegs  = (calc?.warning && extCalc?.segments?.length > 0) ? extCalc.segments : (calc?.segments?.length > 0 ? calc.segments : extCalc?.segments);
+      const effectiveBuild = (calc?.warning ? null : calc?.buildComplete) ?? extCalc?.buildComplete;
       const testDue     = effectiveBuild ? fmtDate(addBizDaysFrom(effectiveBuild, testWeeks * 5)) : "";
       const peakDevs    = effectiveSegs?.length > 0 ? Math.max(...effectiveSegs.map(s => s.devs)) : "";
       const sprintLabels = effectiveSegs?.length > 0
@@ -292,16 +292,19 @@ function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprint
                     {solo ? fmtDate(solo) : "—"}
                   </td>
                   <td style={{ padding: "8px 12px", color: devDueMode === "planned" ? (calc?.warning ? C.accent2 : C.accent) : C.mutedLight, fontWeight: devDueMode === "planned" ? 700 : 400, fontSize: 13, whiteSpace: "nowrap" }}>
-                    {calc?.buildComplete
-                      ? fmtDate(calc.buildComplete)
-                      : extendedBuildMap?.[ep.id]?.buildComplete
-                        ? <span style={{ color: C.accent2 }} title="Projected build date — beyond target date">↗ {fmtDate(extendedBuildMap[ep.id].buildComplete)}</span>
-                        : "—"}
+                    {(() => {
+                      const isOverflow = !!calc?.warning;
+                      const extBd = extendedBuildMap?.[ep.id]?.buildComplete;
+                      if (!isOverflow && calc?.buildComplete) return fmtDate(calc.buildComplete);
+                      if (extBd) return <span style={{ color: C.accent2 }} title="Projected build date — beyond target date">↗ {fmtDate(extBd)}</span>;
+                      return "—";
+                    })()}
                   </td>
                   <td style={{ padding: "8px 12px", color: C.amber, fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>
                     {(() => {
-                      const bd = calc?.buildComplete ?? extendedBuildMap?.[ep.id]?.buildComplete;
-                      const isExt = !calc?.buildComplete && !!bd;
+                      const isOverflow = !!calc?.warning;
+                      const bd = (isOverflow ? null : calc?.buildComplete) ?? extendedBuildMap?.[ep.id]?.buildComplete;
+                      const isExt = isOverflow || (!calc?.buildComplete && !!bd);
                       return bd
                         ? <span style={isExt ? { color: C.accent2 } : {}} title={isExt ? "Derived from projected overflow build date" : undefined}>{fmtDate(addBizDaysFrom(bd, testWeeks * 5))}{isExt ? " ↗" : ""}</span>
                         : "—";
@@ -318,10 +321,13 @@ function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprint
                   </td>
                   <td style={{ padding: "8px 12px", color: C.mutedLight, fontSize: 11, whiteSpace: "nowrap" }}>
                     {(() => {
-                      const segs = calc?.segments?.length > 0 ? calc.segments : extendedBuildMap?.[ep.id]?.segments;
+                      const isOverflow = !!calc?.warning;
+                      const segs = (isOverflow && extendedBuildMap?.[ep.id]?.segments?.length > 0)
+                        ? extendedBuildMap[ep.id].segments
+                        : (calc?.segments?.length > 0 ? calc.segments : extendedBuildMap?.[ep.id]?.segments);
                       const allSprints = extendedSprints || sprints;
                       if (!segs?.length) return "—";
-                      const isExt = !calc?.segments?.length;
+                      const isExt = isOverflow || !calc?.segments?.length;
                       const labels = segs.map(s => (allSprints[s.sprintIdx]?.label ?? `S${s.sprintIdx}`).replace("Sprint ", "S")).join(", ");
                       return <span style={isExt ? { color: C.accent2 } : {}}>{labels}</span>;
                     })()}
@@ -393,7 +399,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
   const overflowTotalSP   = Object.values(overflowEpicMap).reduce((a, b) => a + (b || 0), 0);
 
   function copyCSV() {
-    const headers = ["Sprint","Start","End","Biz Days","SP","Min Req","Staffed","Gap","Epic","Epic SP","Analysis Due","Devs (this sprint)","Dev-days (this sprint)"];
+    const headers = ["Sprint","Start","End","Biz Days","SP","Min Req","Staffed","Slack","Epic","Epic SP","Analysis Due","Devs (this sprint)","Dev-days (this sprint)"];
     const rows = [];
     sprintStats.forEach((s, i) => {
       const sprintSP = Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0));
@@ -473,12 +479,12 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-            {["Sprint","Start","End","Biz Days","SP ⓘ","Min Req ⓘ","Staffed ⓘ","Gap ⓘ",""].map((h, i) => (
+            {["Sprint","Start","End","Biz Days","SP ⓘ","Min Req ⓘ","Staffed ⓘ","Slack ⓘ",""].map((h, i) => (
               <th key={i} title={
                 h === "SP ⓘ" ? "Story points of work in progress this sprint (sum of dev-days × velocity)" :
                 h === "Min Req ⓘ" ? `Minimum devs needed to avoid slippage (uncapped plan). Beyond the target date${targetDate ? ` (${targetDate})` : ""} these are the devs needed to complete overflow work.` :
                 h === "Staffed ⓘ" ? "Your planned headcount per sprint — edit inline. Applies to both in-target and overflow sprints." :
-                h === "Gap ⓘ" ? `Staffed minus actual devs used (including overflow pull-in work) — 0 means fully utilised, negative means shortfall, positive means genuinely idle capacity` : undefined
+                h === "Slack ⓘ" ? `Positive = idle dev capacity this sprint. Zero with red SP = team fully packed but demand exceeds headcount — those SPs slip to overflow. Negative = active shortfall.` : undefined
               } style={{ padding: "9px 14px", textAlign: i === 8 ? "center" : "left", color: C.muted, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 500, whiteSpace: "nowrap", cursor: h.endsWith("ⓘ") ? "help" : "default" }}>{h}</th>
             ))}
           </tr>
@@ -513,9 +519,12 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
                         {(() => {
                           const spPerDev = (perDevVelocityPerDay || 0) * (s.bizDays || 0);
                           const spGap = Math.round(gap * spPerDev);
+                          const demandShortfall = minReq - staffed;
+                          const demandShortfallSP = demandShortfall > 0 ? Math.round(demandShortfall * spPerDev) : 0;
                           const gapStr = gap > 0 ? `+${gap}` : String(gap);
                           const spStr  = spGap > 0 ? `+${spGap}` : String(spGap);
-                          return <span title={`${gapStr} devs · ${spStr} SP equivalent`}>{gapStr}{spGap !== 0 && <span style={{ color: C.mutedLight, fontSize: 10, marginLeft: 4 }}>({spStr} SP)</span>}</span>;
+                          const titleStr = `${gapStr} devs · ${spStr} SP equivalent${demandShortfallSP > 0 ? ` · −${demandShortfallSP} SP undeliverable (need ${demandShortfall} more devs)` : ''}`;
+                          return <span title={titleStr}>{gapStr}{spGap !== 0 && <span style={{ color: spGap < 0 ? C.accent2 : C.mutedLight, fontWeight: spGap < 0 ? 700 : 400, fontSize: 10, marginLeft: 4 }}>({spStr} SP)</span>}{gap === 0 && demandShortfallSP > 0 && <span style={{ color: C.accent2, fontWeight: 700, fontSize: 10, marginLeft: 4 }}>(−{demandShortfallSP} SP)</span>}</span>;
                         })()}
                       </td>
                     </>;
@@ -615,13 +624,16 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
                       onChange={e => onStaffingChange(overflowIdx, Math.max(0, Number(e.target.value)))}
                       style={{ background: C.bg, color: C.text, border: `1px solid ${C.accent2}55`, borderRadius: 4, padding: "3px 7px", fontSize: 13, width: 56, fontFamily: "inherit", outline: "none" }} />
                   </td>
-                  <td style={{ padding: "9px 14px", color: gap < 0 ? C.accent2 : gap === 0 ? C.mutedLight : C.amber, fontWeight: 700 }} title="Staffed minus Min Req for overflow work">
+                  <td style={{ padding: "9px 14px", color: gap < 0 ? C.accent2 : gap === 0 ? C.mutedLight : C.amber, fontWeight: 700 }}>
                     {(() => {
                       const spPerDev = (perDevVelocityPerDay || 0) * (s.bizDays || 0);
                       const spGap = Math.round(gap * spPerDev);
+                      const demandShortfall = minReq - staffed;
+                      const demandShortfallSP = demandShortfall > 0 ? Math.round(demandShortfall * spPerDev) : 0;
                       const gapStr = gap > 0 ? `+${gap}` : String(gap);
                       const spStr  = spGap > 0 ? `+${spGap}` : String(spGap);
-                      return <span title={`${gapStr} devs · ${spStr} SP equivalent (overflow sprint)`}>{gapStr}{spGap !== 0 && <span style={{ color: C.mutedLight, fontSize: 10, marginLeft: 4 }}>({spStr} SP)</span>}</span>;
+                      const titleStr = `Slack = staffed minus devs used. Negative or red SP = shortfall for overflow work.${demandShortfallSP > 0 ? ` −${demandShortfallSP} SP undeliverable (need ${demandShortfall} more devs)` : ""}`;
+                      return <span title={titleStr}>{gapStr}{spGap !== 0 && <span style={{ color: spGap < 0 ? C.accent2 : C.mutedLight, fontWeight: spGap < 0 ? 700 : 400, fontSize: 10, marginLeft: 4 }}>({spStr} SP)</span>}{gap === 0 && demandShortfallSP > 0 && <span style={{ color: C.accent2, fontWeight: 700, fontSize: 10, marginLeft: 4 }}>(−{demandShortfallSP} SP)</span>}</span>;
                     })()}
                   </td>
                   <td style={{ padding: "9px 14px", textAlign: "center", fontSize: 11 }}>
@@ -988,6 +1000,7 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
   const [selected, setSelected] = useState(new Set());
   const [statuses, setStatuses] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
   // epicKey → string: user-overridden SP budget
   const [epicBudgets, setEpicBudgets] = useState({});
 
@@ -1059,20 +1072,38 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
     const base  = jiraBase.trim().replace(/\/$/, "");
     const token = jiraToken.trim();
     if (!base || !token) return;
-    const toSubmit = allRows.filter(r => selected.has(r.key) && r.hasDate);
-    if (!toSubmit.length) return;
+
+    // Only submit rows that have dates AND have actually changed
+    const toSubmit = allRows.filter(r => selected.has(r.key) && r.hasDate && (r.devChanged || r.testChanged));
+    if (!toSubmit.length) {
+      setStatuses(prev => ({ ...prev, __info: "All selected stories already up to date \u2014 nothing to write." }));
+      return;
+    }
+
     setSubmitting(true);
-    setStatuses(prev => { const next = { ...prev }; toSubmit.forEach(r => { next[r.key] = "pending"; }); return next; });
-    for (const row of toSubmit) {
-      const fields = {};
-      if (row.newDevDueStr)  fields[F_DEV_DUE]  = row.newDevDueStr;
-      if (row.newTestDueStr) fields[F_TEST_DUE] = row.newTestDueStr;
-      try {
-        await updateIssue({ base, token, key: row.key, fields });
-        setStatuses(prev => ({ ...prev, [row.key]: "ok" }));
-      } catch (e) {
-        setStatuses(prev => ({ ...prev, [row.key]: `error: ${e.message}` }));
-      }
+    setProgress({ done: 0, total: toSubmit.length });
+    setStatuses(prev => {
+      const next = { ...prev };
+      delete next.__info;
+      toSubmit.forEach(r => { next[r.key] = "pending"; });
+      return next;
+    });
+
+    const BATCH = 10;
+    for (let i = 0; i < toSubmit.length; i += BATCH) {
+      const batch = toSubmit.slice(i, i + BATCH);
+      await Promise.all(batch.map(async row => {
+        const fields = {};
+        if (row.newDevDueStr)  fields[F_DEV_DUE]  = row.newDevDueStr;
+        if (row.newTestDueStr) fields[F_TEST_DUE] = row.newTestDueStr;
+        try {
+          await updateIssue({ base, token, key: row.key, fields });
+          setStatuses(prev => ({ ...prev, [row.key]: "ok" }));
+        } catch (e) {
+          setStatuses(prev => ({ ...prev, [row.key]: `error: ${e.message}` }));
+        }
+        setProgress(prev => ({ ...prev, done: prev.done + 1 }));
+      }));
     }
     setSubmitting(false);
   }
@@ -1085,9 +1116,14 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
     );
   }
 
-  const selectedCount = allRows.filter(r => selected.has(r.key)).length;
-  const baseForLinks  = jiraBase.trim().replace(/\/$/, "");
-  const canSubmit     = !submitting && selectedCount > 0 && !!jiraBase.trim() && !!jiraToken.trim();
+  const selectedCount   = allRows.filter(r => selected.has(r.key)).length;
+  const changedCount    = allRows.filter(r => selected.has(r.key) && r.hasDate && (r.devChanged || r.testChanged)).length;
+  const unchangedCount  = selectedCount - changedCount;
+  const baseForLinks    = jiraBase.trim().replace(/\/$/, "");
+  const canSubmit       = !submitting && selectedCount > 0 && !!jiraBase.trim() && !!jiraToken.trim();
+  const submitLabel     = submitting
+    ? `Submitting\u2026 ${progress.done} / ${progress.total}`
+    : `\u2191 Submit ${changedCount} changed`;
 
   return (
     <div>
@@ -1096,9 +1132,13 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
           Eff. SP = epic budget × (story SP ÷ sum story SPs). Dev Due = Analysis Due + ⌈eff. SP ÷ {perDevVelocityPerDay.toFixed(3)}⌉ biz days. Test Due = Dev Due + {testWeeks * 5} biz days ({testWeeks} wks).
           Edit <span style={{ color: C.amber }}>SP budget</span> per epic to override.
         </div>
-        <button onClick={handleSubmit} disabled={!canSubmit} style={btnStyle(C.accent, !canSubmit)}>
-          {submitting ? "Submitting…" : `↑ Submit ${selectedCount} selected`}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {statuses.__info && <span style={{ color: C.mutedLight, fontSize: 11 }}>{statuses.__info}</span>}
+          {!submitting && unchangedCount > 0 && <span style={{ color: C.muted, fontSize: 11 }}>{unchangedCount} unchanged (will skip)</span>}
+          <button onClick={handleSubmit} disabled={!canSubmit} style={btnStyle(C.accent, !canSubmit)}>
+            {submitLabel}
+          </button>
+        </div>
       </div>
 
       {(!jiraBase.trim() || !jiraToken.trim()) && (
