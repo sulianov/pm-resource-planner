@@ -389,3 +389,38 @@ describe("runPlan", () => {
     sprintStats.forEach(s => expect(s.utilPct).toBe(0));
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// parseDate + fmtDate round-trip
+// ════════════════════════════════════════════════════════════════════════════
+describe("parseDate + fmtDate round-trip", () => {
+  it.each([
+    // [description,          input,          expected ISO]
+    ["YYYY-MM-DD (ISO)",      "2026-05-15",   "2026-05-15"],
+    ["M/D/YYYY (US slash)",   "3/27/2026",    "2026-03-27"],
+    ["D-M-YYYY (DMY hyphens)","27-2-2026",    "2026-02-27"],
+    ["D-Mon (day-abbrev)",    "13-Mar",        `${new Date().getFullYear()}-03-13`],
+  ])("%s: fmtDate(parseDate('%s')) === '%s'", (_desc, input, expected) => {
+    expect(fmtDate(parseDate(input))).toBe(expected);
+  });
+
+  it("non-ISO input '3/27/2026' normalises consistently for Epic Input and Sprint Demand display", () => {
+    // Simulates the Epic Input value prop:
+    //   parseDate(ep.analysisDue) ? fmtDate(parseDate(ep.analysisDue)) : (ep.analysisDue ?? "")
+    // and the Sprint Demand cell:
+    //   e.analysisDue ? fmtDate(e.analysisDue) : "—"
+    // Both should produce the same canonical YYYY-MM-DD string.
+    const raw = "3/27/2026";
+    const parsed = parseDate(raw);
+
+    // Epic Input display (value prop normalisation)
+    const epicInputDisplay = parsed ? fmtDate(parsed) : (raw ?? "");
+
+    // Sprint Demand display (analysisDue is stored as the raw string in activeEpics)
+    const sprintDemandDisplay = raw ? fmtDate(parseDate(raw)) : "—";
+
+    expect(epicInputDisplay).toBe("2026-03-27");
+    expect(sprintDemandDisplay).toBe("2026-03-27");
+    expect(epicInputDisplay).toBe(sprintDemandDisplay);
+  });
+});

@@ -227,12 +227,12 @@ export function runPlan({ epics, perDevVelocityPerDay, totalDevs, sprintStartDat
  * overrideSP replaces story.sp when provided (proportional redistribution).
  * story.analysisDue must already be a Date object.
  */
-export function calcStoryDates(story, perDevVelocityPerDay, overrideSP) {
+export function calcStoryDates(story, perDevVelocityPerDay, overrideSP, testBizDays = 20) {
   const start = story.analysisDue; // Date | null
   const sp    = overrideSP !== undefined ? overrideSP : (parseFloat(story.sp) || 0);
   if (!start || sp <= 0 || perDevVelocityPerDay <= 0) return { devDue: null, testDue: null };
   const devDue  = addBizDaysFrom(start, Math.ceil(sp / perDevVelocityPerDay));
-  const testDue = addBizDaysFrom(devDue, 20);
+  const testDue = addBizDaysFrom(devDue, testBizDays);
   return { devDue, testDue };
 }
 

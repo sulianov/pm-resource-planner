@@ -108,7 +108,7 @@ function deriveRisks(epic, assignedEpic, extendedEpic, targetDateStr) {
   return reasons;
 }
 
-function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprints, extendedSprints, perDevVelocityPerDay, teamSize, devDueMode, maxDevsPerEpic, targetDate }) {
+function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprints, extendedSprints, perDevVelocityPerDay, teamSize, devDueMode, maxDevsPerEpic, targetDate, testWeeks = 6 }) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -163,7 +163,7 @@ function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprint
       const ff      = calcFullFocusDate(ep, perDevVelocityPerDay, teamSize);
       const effectiveSegs  = calc?.segments?.length > 0 ? calc.segments : extCalc?.segments;
       const effectiveBuild = calc?.buildComplete ?? extCalc?.buildComplete;
-      const testDue     = effectiveBuild ? fmtDate(addBizDaysFrom(effectiveBuild, 20)) : "";
+      const testDue     = effectiveBuild ? fmtDate(addBizDaysFrom(effectiveBuild, testWeeks * 5)) : "";
       const peakDevs    = effectiveSegs?.length > 0 ? Math.max(...effectiveSegs.map(s => s.devs)) : "";
       const sprintLabels = effectiveSegs?.length > 0
         ? effectiveSegs.map(s => (allSprints[s.sprintIdx]?.label ?? `S${s.sprintIdx}`).replace("Sprint ", "S")).join(", ")
@@ -175,7 +175,7 @@ function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprint
         ep.analysisDue,
         ep.fixVersion || "",
         ff ? fmtDate(ff) : "",
-        ff ? fmtDate(addBizDaysFrom(ff, 20)) : "",
+        ff ? fmtDate(addBizDaysFrom(ff, testWeeks * 5)) : "",
         solo ? fmtDate(solo) : "",
         effectiveBuild ? fmtDate(effectiveBuild) : "",
         testDue,
@@ -278,7 +278,7 @@ function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprint
                       style={inputStyle({ width: 56 })} />
                   </td>
                   <td style={{ padding: "4px 8px" }}>
-                    <input value={ep.analysisDue} onChange={e => update(ep.id, "analysisDue", e.target.value)}
+                    <input value={parseDate(ep.analysisDue) ? fmtDate(parseDate(ep.analysisDue)) : (ep.analysisDue ?? "")} onChange={e => update(ep.id, "analysisDue", e.target.value)}
                       placeholder="YYYY-MM-DD"
                       style={inputStyle({ width: 130 })} />
                   </td>
@@ -295,7 +295,7 @@ function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprint
                     {calc?.buildComplete
                       ? fmtDate(calc.buildComplete)
                       : extendedBuildMap?.[ep.id]?.buildComplete
-                        ? <span style={{ color: C.accent2 }} title="Projected build date — beyond sprint window">↗ {fmtDate(extendedBuildMap[ep.id].buildComplete)}</span>
+                        ? <span style={{ color: C.accent2 }} title="Projected build date — beyond target date">↗ {fmtDate(extendedBuildMap[ep.id].buildComplete)}</span>
                         : "—"}
                   </td>
                   <td style={{ padding: "8px 12px", color: C.amber, fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>
@@ -303,7 +303,7 @@ function EpicInputTab({ epics, onChange, assignedEpics, extendedBuildMap, sprint
                       const bd = calc?.buildComplete ?? extendedBuildMap?.[ep.id]?.buildComplete;
                       const isExt = !calc?.buildComplete && !!bd;
                       return bd
-                        ? <span style={isExt ? { color: C.accent2 } : {}} title={isExt ? "Derived from projected overflow build date" : undefined}>{fmtDate(addBizDaysFrom(bd, 20))}{isExt ? " ↗" : ""}</span>
+                        ? <span style={isExt ? { color: C.accent2 } : {}} title={isExt ? "Derived from projected overflow build date" : undefined}>{fmtDate(addBizDaysFrom(bd, testWeeks * 5))}{isExt ? " ↗" : ""}</span>
                         : "—";
                     })()}
                   </td>
@@ -399,7 +399,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
       const sprintSP = Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0));
       const minReq  = uncappedStats?.[i]?.devsNeeded ?? 0;
       const staffed = staffingOverrides[i] ?? teamSize;
-      const gap     = staffed - minReq;
+      const gap     = staffed - (s.devsNeeded ?? 0);
       if (s.activeEpics.length === 0) {
         rows.push([s.label, fmtDate(s.start), fmtDate(s.end), s.bizDays, sprintSP, minReq, staffed, gap, "", "", "", "", ""]);
       } else {
@@ -422,7 +422,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
       rows.push([`--- BEYOND TARGET${targetDate ? ` (${targetDate})` : ""} ---`, "", "", "", "", "", "", "", "", "", "", "", ""]);
       overflowSprintStats.forEach((s, oi) => {
         const sprintSP    = Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0));
-        const overflowIdx = numSprints + oi;
+        const overflowIdx = s.idx;
         const oMinReq     = s.devsNeeded ?? 0;
         const oStaffed    = staffingOverrides[overflowIdx] ?? teamSize;
         const oGap        = oStaffed - oMinReq;
@@ -478,7 +478,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
                 h === "SP ⓘ" ? "Story points of work in progress this sprint (sum of dev-days × velocity)" :
                 h === "Min Req ⓘ" ? `Minimum devs needed to avoid slippage (uncapped plan). Beyond the target date${targetDate ? ` (${targetDate})` : ""} these are the devs needed to complete overflow work.` :
                 h === "Staffed ⓘ" ? "Your planned headcount per sprint — edit inline. Applies to both in-target and overflow sprints." :
-                h === "Gap ⓘ" ? `Staffed minus Min Req — negative means shortfall. SP equivalent shown in brackets. For overflow sprints this shows extra demand needed beyond target date${targetDate ? ` (${targetDate})` : ""}.` : undefined
+                h === "Gap ⓘ" ? `Staffed minus actual devs used (including overflow pull-in work) — 0 means fully utilised, negative means shortfall, positive means genuinely idle capacity` : undefined
               } style={{ padding: "9px 14px", textAlign: i === 8 ? "center" : "left", color: C.muted, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 500, whiteSpace: "nowrap", cursor: h.endsWith("ⓘ") ? "help" : "default" }}>{h}</th>
             ))}
           </tr>
@@ -501,9 +501,9 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
                   {(() => {
                     const minReq  = uncappedStats?.[i]?.devsNeeded ?? 0;
                     const staffed = staffingOverrides[i] ?? teamSize;
-                    const gap     = staffed - minReq;
+                    const gap     = staffed - (s.devsNeeded ?? 0);
                     return <>
-                      <td style={{ padding: "9px 14px", color: C.accent, fontWeight: 700, fontSize: 15 }}>{minReq}</td>
+                      <td style={{ padding: "9px 14px", color: staffed < minReq ? C.accent2 : C.accent, fontWeight: 700, fontSize: 15 }}>{minReq}</td>
                       <td style={{ padding: "4px 8px" }} onClick={e => e.stopPropagation()}>
                         <input type="number" min={0} value={staffed}
                           onChange={e => onStaffingChange(i, Math.max(0, Number(e.target.value)))}
@@ -582,7 +582,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
           {overflowSprintStats.map((s, oi) => {
             const key = `o${oi}`;
             const isOpen = openSet.has(key);
-            const overflowIdx = numSprints + oi;
+            const overflowIdx = s.idx;
             const minReq  = s.devsNeeded ?? 0;
             const staffed = staffingOverrides[overflowIdx] ?? teamSize;
             const gap     = staffed - minReq;
@@ -609,7 +609,7 @@ function SprintDemandTab({ sprintStats, uncappedStats, teamSize, staffingOverrid
                   <td style={{ padding: "9px 14px", color: C.amber, fontWeight: 600 }} title={`${Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0))} SP in progress this overflow sprint`}>
                     {(() => { const sp = Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0)); return sp > 0 ? sp : "—"; })()}
                   </td>
-                  <td style={{ padding: "9px 14px", color: C.amber, fontWeight: 700, fontSize: 15 }} title="Devs needed to complete overflow work in this sprint">{minReq}</td>
+                  <td style={{ padding: "9px 14px", color: staffed < minReq ? C.accent2 : C.amber, fontWeight: 700, fontSize: 15 }} title="Devs needed to complete overflow work in this sprint">{minReq}</td>
                   <td style={{ padding: "4px 8px" }} onClick={e => e.stopPropagation()}>
                     <input type="number" min={0} value={staffed}
                       onChange={e => onStaffingChange(overflowIdx, Math.max(0, Number(e.target.value)))}
@@ -984,7 +984,7 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
 }
 
 // ── Write-back Tab ────────────────────────────────────────────────────────────
-function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jiraToken, focusEpicKey }) {
+function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jiraToken, focusEpicKey, testWeeks = 6 }) {
   const [selected, setSelected] = useState(new Set());
   const [statuses, setStatuses] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -1016,7 +1016,7 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
           const effectiveSP = sumStorySP > 0
             ? budget * (stSP / sumStorySP)
             : budget / Math.max(stories.length, 1);
-          const { devDue, testDue } = calcStoryDates(story, perDevVelocityPerDay, effectiveSP);
+          const { devDue, testDue } = calcStoryDates(story, perDevVelocityPerDay, effectiveSP, testWeeks * 5);
           const newDevDueStr  = devDue  ? fmtDate(devDue)  : null;
           const newTestDueStr = testDue ? fmtDate(testDue) : null;
           return {
@@ -1093,7 +1093,7 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
         <div style={{ color: C.muted, fontSize: 11, lineHeight: 1.8 }}>
-          Eff. SP = epic budget × (story SP ÷ sum story SPs). Dev Due = Analysis Due + ⌈eff. SP ÷ {perDevVelocityPerDay.toFixed(3)}⌉ biz days. Test Due = Dev Due + 20 biz days.
+          Eff. SP = epic budget × (story SP ÷ sum story SPs). Dev Due = Analysis Due + ⌈eff. SP ÷ {perDevVelocityPerDay.toFixed(3)}⌉ biz days. Test Due = Dev Due + {testWeeks * 5} biz days ({testWeeks} wks).
           Edit <span style={{ color: C.amber }}>SP budget</span> per epic to override.
         </div>
         <button onClick={handleSubmit} disabled={!canSubmit} style={btnStyle(C.accent, !canSubmit)}>
@@ -1256,6 +1256,7 @@ export default function App() {
   const [writebackFocusKey, setWritebackFocusKey] = useState(null);
   const [maxDevsPerEpic, setMaxDevsPerEpic] = useState(2);
   const [staffingOverrides, setStaffingOverrides] = useState({});
+  const [testWeeks, setTestWeeks] = useState(6);
 
   const { perDevVelocityPerDay, teamSize } = useMemo(() => {
     const rows = parseTSV(teamRaw);
@@ -1424,6 +1425,11 @@ export default function App() {
             <input type="number" min={1} max={teamSize} value={maxDevsPerEpic} onChange={e => setMaxDevsPerEpic(Math.max(1, Number(e.target.value)))}
               style={inputStyle({ width: 60, marginTop: 3 })} />
           </div>
+          <div>
+            <label style={{ color: C.muted, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }} title="Business weeks allocated for testing after build complete.">Test window ⓘ</label>
+            <input type="number" min={1} max={52} value={testWeeks} onChange={e => setTestWeeks(Math.max(1, Math.min(52, Number(e.target.value) || 6)))}
+              style={inputStyle({ width: 60, marginTop: 3 })} />
+          </div>
           <div style={{ height: 1, background: C.border }} />
           <div style={{ color: C.muted, fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase" }}>● Team Velocity</div>
           <div>
@@ -1479,7 +1485,7 @@ export default function App() {
             onChange={setActiveTab}
           />
           <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto", overflowX: "auto" }}>
-            {activeTab === "Epic Input" && <EpicInputTab epics={epicRows} onChange={setEpicRows} assignedEpics={assignedEpics} extendedBuildMap={extendedBuildMap} sprints={sprints} extendedSprints={extendedSprints} perDevVelocityPerDay={perDevVelocityPerDay} teamSize={teamSize} devDueMode={devDueMode} maxDevsPerEpic={maxDevsPerEpic} targetDate={targetDate} />}
+            {activeTab === "Epic Input" && <EpicInputTab epics={epicRows} onChange={setEpicRows} assignedEpics={assignedEpics} extendedBuildMap={extendedBuildMap} sprints={sprints} extendedSprints={extendedSprints} perDevVelocityPerDay={perDevVelocityPerDay} teamSize={teamSize} devDueMode={devDueMode} maxDevsPerEpic={maxDevsPerEpic} targetDate={targetDate} testWeeks={testWeeks} />}
             {activeTab === "Jira Import" && (
               <JiraImportTab
                 jiraBase={jiraBase} setJiraBase={setJiraBase}
@@ -1498,6 +1504,7 @@ export default function App() {
                 jiraBase={jiraBase}
                 jiraToken={jiraToken}
                 focusEpicKey={writebackFocusKey}
+                testWeeks={testWeeks}
               />
             )}
             {activeTab === "Sprint Demand" && <SprintDemandTab sprintStats={sprintStats} uncappedStats={uncappedStats} teamSize={teamSize} staffingOverrides={staffingOverrides} onStaffingChange={(i, v) => setStaffingOverrides(prev => ({ ...prev, [i]: v }))} onEpicClick={epicKey => { setWritebackFocusKey(epicKey); setActiveTab("Write-back"); }} perDevVelocityPerDay={perDevVelocityPerDay} overflowSprintStats={overflowSprintStats} targetDate={targetDate} numSprints={numSprints} />}
