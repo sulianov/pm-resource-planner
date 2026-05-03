@@ -854,8 +854,6 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
     if (!base || !token || !jql) {
       setMsg("Fill in Jira Base URL, Bearer Token, and JQL."); setStatus("error"); return;
     }
-    sessionStorage.setItem("sp_jiraBase", base);
-    sessionStorage.setItem("sp_jiraJql", jql);
     const ac = new AbortController();
     abortRef.current = ac;
     setStatus("loading"); setMsg(""); setProgress({ fetched: 0, total: 0 });
@@ -943,7 +941,7 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
       <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
         <div>
           <label style={labelStyle()} title="When set, epics whose Fix Version differs from this value will use story sum SP only (ignores epic estimate). Leave blank to always use epic estimate.">Fix Version scope <span style={{ color: C.muted }}>(optional)</span></label>
-          <input value={fixVersionScope} onChange={e => { setFixVersionScope(e.target.value); sessionStorage.setItem("sp_fixVersionScope", e.target.value); }}
+          <input value={fixVersionScope} onChange={e => setFixVersionScope(e.target.value)}
             placeholder="e.g. R1.1"
             style={inputStyle({ width: 140 })} />
         </div>
@@ -1254,6 +1252,247 @@ function WritebackTab({ storyMap, epicRows, perDevVelocityPerDay, jiraBase, jira
   );
 }
 
+// ── Sprint Burndown Tab ───────────────────────────────────────────────────────
+function BurndownTab({ sprintStats, overflowSprintStats, totalSP, targetDate, perDevVelocityPerDay }) {
+  const [targetVelocity, setTargetVelocity] = useState("");
+
+  const allStats = useMemo(() => [
+    ...sprintStats.map(s => ({ ...s, isOverflow: false })),
+    ...overflowSprintStats.map(s => ({ ...s, isOverflow: true })),
+  ], [sprintStats, overflowSprintStats]);
+
+  // burnPoints[0] = Start (totalSP), burnPoints[i+1] = after sprint i
+  const burnPoints = useMemo(() => {
+    const pts = [{ label: "Start", rem: totalSP, sprintSP: 0, isOverflow: false }];
+    let rem = totalSP;
+    allStats.forEach(s => {
+      const sp = Math.round(s.activeEpics.reduce((sum, e) => sum + e.devDays, 0) * (perDevVelocityPerDay || 0));
+      rem = Math.max(0, rem - sp);
+      pts.push({ label: s.label, rem, sprintSP: sp, isOverflow: s.isOverflow, start: s.start, end: s.end });
+    });
+    return pts;
+  }, [allStats, totalSP, perDevVelocityPerDay]);
+
+  // Trim trailing no-work tail, but always show the full in-target window
+  const visiblePoints = useMemo(() => {
+    const lastWorkIdx = burnPoints.reduce((last, p, i) => p.sprintSP > 0 ? i : last, 0);
+    const showTo = Math.min(burnPoints.length, Math.max(sprintStats.length + 1, lastWorkIdx + 2));
+    return burnPoints.slice(0, showTo);
+  }, [burnPoints, sprintStats.length]);
+
+  // Ideal: linear from totalSP → 0 over in-target sprints
+  const idealLine = useMemo(() => {
+    const n = sprintStats.length;
+    return visiblePoints.map((_, i) => n > 0 ? Math.max(0, totalSP * (1 - i / n)) : 0);
+  }, [visiblePoints, totalSP, sprintStats.length]);
+
+  // Optional target velocity overlay
+  const targetVel = parseFloat(targetVelocity);
+  const targetLine = useMemo(() => {
+    if (!(targetVel > 0)) return null;
+    let rem = totalSP;
+    return visiblePoints.map((_, i) => {
+      if (i === 0) return totalSP;
+      rem = Math.max(0, rem - targetVel);
+      return rem;
+    });
+  }, [visiblePoints, totalSP, targetVel]);
+
+  // Stats
+  const sprintsWithWork = useMemo(
+    () => sprintStats.filter(s => s.activeEpics.length > 0).length,
+    [sprintStats]);
+  const avgSPPerSprint = useMemo(() => {
+    if (!sprintsWithWork) return 0;
+    const burned = sprintStats.reduce((sum, s) =>
+      sum + Math.round(s.activeEpics.reduce((a, e) => a + e.devDays, 0) * (perDevVelocityPerDay || 0)), 0);
+    return burned / sprintsWithWork;
+  }, [sprintStats, sprintsWithWork, perDevVelocityPerDay]);
+  const remainingAtEnd = visiblePoints[visiblePoints.length - 1]?.rem ?? totalSP;
+  const activeOverflowCount = overflowSprintStats.filter(s => s.activeEpics.length > 0).length;
+
+  if (totalSP <= 0) {
+    return (
+      <div style={{ color: C.muted, textAlign: "center", padding: "64px 0", fontSize: 13 }}>
+        No scope defined — add epics with SP in the <span style={{ color: C.accent }}>Epic Input</span> tab.
+      </div>
+    );
+  }
+
+  // SVG layout
+  const H = 280, PAD_L = 62, PAD_T = 24, PAD_B = 84, PAD_R = 30;
+  const n = visiblePoints.length;
+  const slotW = Math.max(30, Math.min(58, 820 / Math.max(n, 1)));
+  const totalW = PAD_L + n * slotW + PAD_R;
+  const maxY = totalSP;
+  const tx = i => PAD_L + i * slotW;
+  const ty = v => PAD_T + H - (v / maxY) * H;
+  const polyPts = vals => vals.map((v, i) => `${tx(i)},${ty(v)}`).join(" ");
+
+  const planVals = visiblePoints.map(p => p.rem);
+  const areaPts = `${polyPts(planVals)} ${tx(n - 1)},${PAD_T + H} ${tx(0)},${PAD_T + H}`;
+  // Target-date divider x: midpoint between last in-target and first overflow point
+  const dividerX = tx(sprintStats.length) + slotW / 2;
+
+  return (
+    <div>
+      {/* Key stats */}
+      <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+        {[
+          ["Total Scope", `${totalSP % 1 === 0 ? totalSP : totalSP.toFixed(1)} SP`, C.text],
+          ["Avg SP / Sprint", `${avgSPPerSprint.toFixed(1)} SP`, C.accent],
+          ["Sprints w/ work", String(sprintsWithWork), C.mutedLight],
+          ["Remaining (EoP)", remainingAtEnd > 0 ? `${remainingAtEnd.toFixed(0)} SP` : "✓ Done", remainingAtEnd > 0 ? C.accent2 : C.accent],
+          ["Overflow sprints", String(activeOverflowCount), activeOverflowCount > 0 ? C.accent2 : C.muted],
+        ].map(([label, val, col]) => (
+          <div key={label} style={{ background: C.surface2, borderRadius: 8, padding: "10px 18px", minWidth: 130 }}>
+            <div style={{ color: C.muted, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>{label}</div>
+            <div style={{ color: col, fontSize: 17, fontFamily: "Syne,sans-serif", fontWeight: 700 }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Target velocity input */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <label style={labelStyle()}>Target SP / sprint</label>
+        <input type="number" min={0} step={1}
+          value={targetVelocity}
+          onChange={e => setTargetVelocity(e.target.value)}
+          placeholder={String(Math.round(totalSP / Math.max(sprintStats.length, 1)))}
+          style={inputStyle({ width: 90 })} />
+        <span style={{ color: C.muted, fontSize: 10 }}>optional — draws a target velocity reference line</span>
+      </div>
+
+      {/* Burndown chart */}
+      <div style={{ overflowX: "auto", marginBottom: 24 }}>
+        <svg width={totalW} height={H + PAD_T + PAD_B} style={{ display: "block", fontFamily: "inherit" }}>
+          {/* Y-axis grid */}
+          {[0, 0.25, 0.5, 0.75, 1].map(p => {
+            const y = ty(maxY * p);
+            return (
+              <g key={p}>
+                <line x1={PAD_L} y1={y} x2={totalW - PAD_R} y2={y} stroke={C.border} strokeWidth={0.8} />
+                <text x={PAD_L - 8} y={y + 4} textAnchor="end" fill={C.muted} fontSize={9}>{Math.round(maxY * p)}</text>
+              </g>
+            );
+          })}
+
+          {/* Target-date vertical divider */}
+          {activeOverflowCount > 0 && (
+            <g>
+              <line x1={dividerX} y1={PAD_T} x2={dividerX} y2={PAD_T + H} stroke={C.accent2} strokeWidth={1.5} strokeDasharray="5 3" opacity={0.7} />
+              <text x={dividerX + 4} y={PAD_T + 14} fill={C.accent2} fontSize={9} fontWeight="bold">target</text>
+              {targetDate && <text x={dividerX + 4} y={PAD_T + 26} fill={C.accent2} fontSize={8} opacity={0.7}>{targetDate}</text>}
+            </g>
+          )}
+
+          {/* Area fill under planned line */}
+          <polygon points={areaPts} fill={C.accent} opacity={0.06} />
+
+          {/* Ideal line (dashed) */}
+          <polyline points={polyPts(idealLine)} fill="none"
+            stroke={C.accent} strokeWidth={1.5} strokeDasharray="7 4" opacity={0.45} />
+
+          {/* Target velocity line */}
+          {targetLine && (
+            <polyline points={polyPts(targetLine)} fill="none"
+              stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.8} />
+          )}
+
+          {/* Planned burndown */}
+          <polyline points={polyPts(planVals)} fill="none"
+            stroke={C.accent} strokeWidth={2.5} strokeLinejoin="round" />
+
+          {/* Data points */}
+          {planVals.map((v, i) => (
+            <circle key={i} cx={tx(i)} cy={ty(v)} r={3.5}
+              fill={visiblePoints[i]?.isOverflow ? C.accent2 : C.accent} opacity={0.9} />
+          ))}
+
+          {/* X-axis labels */}
+          {visiblePoints.map((p, i) => (
+            <text key={i} x={tx(i)} y={PAD_T + H + 18} textAnchor="end"
+              fill={p.isOverflow ? C.accent2 + "aa" : C.muted} fontSize={8}
+              transform={`rotate(-48 ${tx(i)} ${PAD_T + H + 18})`}>
+              {p.label}
+            </text>
+          ))}
+
+          {/* Y-axis label */}
+          <text x={11} y={PAD_T + H / 2} textAnchor="middle"
+            fill={C.muted} fontSize={9}
+            transform={`rotate(-90 11 ${PAD_T + H / 2})`}>SP remaining</text>
+
+          {/* Legend */}
+          <g transform={`translate(${PAD_L + 14}, ${PAD_T + 14})`}>
+            <line x1={0} y1={6} x2={20} y2={6} stroke={C.accent} strokeWidth={2.5} />
+            <text x={24} y={10} fill={C.mutedLight} fontSize={9}>Planned burndown</text>
+            <line x1={120} y1={6} x2={140} y2={6} stroke={C.accent} strokeWidth={1.5} strokeDasharray="7 4" opacity={0.45} />
+            <text x={144} y={10} fill={C.mutedLight} fontSize={9}>Ideal</text>
+            {targetLine && (
+              <>
+                <line x1={178} y1={6} x2={198} y2={6} stroke={C.amber} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.8} />
+                <text x={202} y={10} fill={C.mutedLight} fontSize={9}>Target vel.</text>
+              </>
+            )}
+          </g>
+        </svg>
+      </div>
+
+      {/* Table */}
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {["Sprint", "SP Burned", "SP Remaining", "Ideal Remaining", "Schedule Variance"].map(h => (
+                <th key={h} style={{ padding: "8px 12px", textAlign: "left", color: C.muted, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 500 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {visiblePoints.slice(1).map((p, i) => {
+              const ideal = Math.max(0, idealLine[i + 1]);
+              const variance = p.rem - ideal; // positive = behind, negative = ahead
+              const varCol = variance > 5 ? C.accent2 : variance < -5 ? C.accent : C.mutedLight;
+              const varLabel = Math.abs(variance) <= 5 ? "On track"
+                : variance < 0 ? `↑ ${Math.abs(variance).toFixed(0)} SP ahead`
+                : `↓ ${variance.toFixed(0)} SP behind`;
+              return (
+                <tr key={i} style={{ borderBottom: `1px solid ${C.border}18`, background: p.isOverflow ? C.accent2 + "0a" : i % 2 === 0 ? "transparent" : C.surface + "55" }}>
+                  <td style={{ padding: "7px 12px", color: p.isOverflow ? C.accent2 : C.text, fontWeight: 600, whiteSpace: "nowrap" }}>
+                    {p.label}
+                    {p.isOverflow && <span style={{ marginLeft: 6, fontSize: 9, color: C.accent2 }}>↗ overflow</span>}
+                  </td>
+                  <td style={{ padding: "7px 12px", color: C.accent, fontWeight: 700 }}>{p.sprintSP > 0 ? p.sprintSP : "—"}</td>
+                  <td style={{ padding: "7px 12px", color: p.rem <= 0 ? C.accent : C.text, fontWeight: 600 }}>
+                    {p.rem > 0 ? p.rem.toFixed(0) : <span style={{ color: C.accent }}>✓ 0</span>}
+                  </td>
+                  <td style={{ padding: "7px 12px", color: C.mutedLight }}>{ideal.toFixed(0)}</td>
+                  <td style={{ padding: "7px 12px", color: varCol, fontWeight: 600 }}>{varLabel}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Session persistence ─────────────────────────────────────────────────────
+const STORAGE_KEY = "sp_session_v1";
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+function clearSession() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+}
+
 // ── Sample data ───────────────────────────────────────────────────────────────
 const SAMPLE_EPICS = [
   { id: 1, name: "BMO-69546 Payment Gateway", sp: "40", analysisDue: "2026-02-01" },
@@ -1279,24 +1518,47 @@ James Wilson\tDev\tC&S\t6`;
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [epicRows, setEpicRows] = useState(SAMPLE_EPICS);
-  const [teamRaw, setTeamRaw] = useState(SAMPLE_TEAM);
-  const [velCol, setVelCol] = useState(3);
-  const [targetDate, setTargetDate] = useState("2026-09-28");
-  const [sprintLengthDays, setSprintLengthDays] = useState(14);
-  const [sprintStart, setSprintStart] = useState("2026-02-16");
-  const [startSprintNum, setStartSprintNum] = useState(90);
-  const [activeTab, setActiveTab] = useState("Epic Input");
-  const [devDueMode, setDevDueMode] = useState("planned"); // "planned" | "solo"
-  const [jiraBase, setJiraBase] = useState(() => sessionStorage.getItem("sp_jiraBase") || "");
-  const [jiraToken, setJiraToken] = useState("");
-  const [jiraJql, setJiraJql] = useState(() => sessionStorage.getItem("sp_jiraJql") || "");
-  const [jiraFixVersionScope, setJiraFixVersionScope] = useState(() => sessionStorage.getItem("sp_fixVersionScope") || "");
-  const [storyMap, setStoryMap] = useState({});
+  const [epicRows, setEpicRows] = useState(() => loadSession().epicRows ?? SAMPLE_EPICS);
+  const [teamRaw, setTeamRaw] = useState(() => loadSession().teamRaw ?? SAMPLE_TEAM);
+  const [velCol, setVelCol] = useState(() => loadSession().velCol ?? 3);
+  const [targetDate, setTargetDate] = useState(() => loadSession().targetDate ?? "2026-09-28");
+  const [sprintLengthDays, setSprintLengthDays] = useState(() => loadSession().sprintLengthDays ?? 14);
+  const [sprintStart, setSprintStart] = useState(() => loadSession().sprintStart ?? "2026-02-16");
+  const [startSprintNum, setStartSprintNum] = useState(() => loadSession().startSprintNum ?? 90);
+  const [activeTab, setActiveTab] = useState(() => loadSession().activeTab ?? "Epic Input");
+  const [devDueMode, setDevDueMode] = useState(() => loadSession().devDueMode ?? "planned"); // "planned" | "solo"
+  const [jiraBase, setJiraBase] = useState(() => loadSession().jiraBase ?? sessionStorage.getItem("sp_jiraBase") ?? "");
+  const [jiraToken, setJiraToken] = useState(""); // never persisted
+  const [jiraJql, setJiraJql] = useState(() => loadSession().jiraJql ?? sessionStorage.getItem("sp_jiraJql") ?? "");
+  const [jiraFixVersionScope, setJiraFixVersionScope] = useState(() => loadSession().jiraFixVersionScope ?? sessionStorage.getItem("sp_fixVersionScope") ?? "");
+  const [storyMap, setStoryMap] = useState(() => loadSession().storyMap ?? {});
   const [writebackFocusKey, setWritebackFocusKey] = useState(null);
-  const [maxDevsPerEpic, setMaxDevsPerEpic] = useState(2);
-  const [staffingOverrides, setStaffingOverrides] = useState({});
-  const [testWeeks, setTestWeeks] = useState(6);
+  const [maxDevsPerEpic, setMaxDevsPerEpic] = useState(() => loadSession().maxDevsPerEpic ?? 2);
+  const [staffingOverrides, setStaffingOverrides] = useState(() => loadSession().staffingOverrides ?? {});
+  const [testWeeks, setTestWeeks] = useState(() => loadSession().testWeeks ?? 6);
+  const [resetConfirm, setResetConfirm] = useState(false);
+
+  // Persist session to localStorage (debounced 400 ms)
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          epicRows, teamRaw, velCol, targetDate, sprintLengthDays, sprintStart,
+          startSprintNum, activeTab, devDueMode, jiraBase, jiraJql,
+          jiraFixVersionScope, storyMap, maxDevsPerEpic, staffingOverrides, testWeeks,
+        }));
+      } catch { /* quota exceeded — silently ignore */ }
+    }, 400);
+    return () => clearTimeout(id);
+  }, [epicRows, teamRaw, velCol, targetDate, sprintLengthDays, sprintStart,
+      startSprintNum, activeTab, devDueMode, jiraBase, jiraJql,
+      jiraFixVersionScope, storyMap, maxDevsPerEpic, staffingOverrides, testWeeks]);
+
+  function handleResetSession() {
+    if (!resetConfirm) { setResetConfirm(true); setTimeout(() => setResetConfirm(false), 3000); return; }
+    clearSession();
+    window.location.reload();
+  }
 
   const { perDevVelocityPerDay, teamSize } = useMemo(() => {
     const rows = parseTSV(teamRaw);
@@ -1515,12 +1777,30 @@ export default function App() {
             Build complete = actual day work finishes<br/>
             Parallel packing up to team size
           </div>
+
+          <div style={{ height: 1, background: C.border }} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ color: C.muted, fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase" }}>● Session</div>
+            <div style={{ color: C.muted, fontSize: 10, lineHeight: 1.6 }}>
+              All inputs auto-saved to <span style={{ color: C.mutedLight }}>localStorage</span>. Restored on refresh.
+              <br/>Token is never saved.
+            </div>
+            <button onClick={handleResetSession} style={{
+              marginTop: 4,
+              background: resetConfirm ? C.accent2 + "22" : "transparent",
+              border: `1px solid ${resetConfirm ? C.accent2 : C.border}`,
+              color: resetConfirm ? C.accent2 : C.muted,
+              borderRadius: 6, padding: "5px 10px", fontSize: 10, letterSpacing: "0.08em",
+              cursor: "pointer", fontFamily: "inherit", textTransform: "uppercase",
+              transition: "all 0.15s",
+            }}>{resetConfirm ? "⚠ Confirm reset" : "Reset to defaults"}</button>
+          </div>
         </div>
 
         {/* Main */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <TabBar
-            tabs={["Epic Input","Jira Import","Write-back","Sprint Demand","Utilisation Chart","Gantt"]}
+            tabs={["Epic Input","Jira Import","Write-back","Sprint Demand","Burndown","Utilisation Chart","Gantt"]}
             active={activeTab}
             onChange={setActiveTab}
           />
@@ -1548,6 +1828,15 @@ export default function App() {
               />
             )}
             {activeTab === "Sprint Demand" && <SprintDemandTab sprintStats={sprintStats} uncappedStats={uncappedStats} teamSize={teamSize} staffingOverrides={staffingOverrides} onStaffingChange={(i, v) => setStaffingOverrides(prev => ({ ...prev, [i]: v }))} onEpicClick={epicKey => { setWritebackFocusKey(epicKey); setActiveTab("Write-back"); }} perDevVelocityPerDay={perDevVelocityPerDay} overflowSprintStats={overflowSprintStats} targetDate={targetDate} numSprints={numSprints} />}
+            {activeTab === "Burndown" && (
+              <BurndownTab
+                sprintStats={sprintStats}
+                overflowSprintStats={overflowSprintStats}
+                totalSP={totalSP}
+                targetDate={targetDate}
+                perDevVelocityPerDay={perDevVelocityPerDay}
+              />
+            )}
             {activeTab === "Utilisation Chart" && <UtilChart sprintStats={sprintStats} teamSize={teamSize} />}
             {activeTab === "Gantt" && <GanttView assignedEpics={assignedEpics} sprints={sprints} extendedBuildMap={extendedBuildMap} targetDate={targetDate} extendedSprints={extendedSprints} />}
           </div>

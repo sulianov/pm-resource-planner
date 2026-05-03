@@ -1,6 +1,6 @@
 # sprint-planner
 
-A React + Vite sprint planning tool for scheduling epics across sprints, reverse-planning headcount requirements, and writing calculated due dates back to Jira.
+A React + Vite sprint planning tool for scheduling epics across sprints, reverse-planning headcount requirements, tracking scope burndown, and writing calculated due dates back to Jira.
 
 ## Features
 
@@ -27,7 +27,7 @@ A React + Vite sprint planning tool for scheduling epics across sprints, reverse
 | Full Focus | Theoretical best-case date if the whole team swarms this epic |
 | Solo Dev Due Date | Date if one average dev worked it alone |
 | Planned Dev Due Date | Realistic date from the team plan |
-| Test Due Date | Planned Dev Due + 20 biz days |
+| Test Due Date | Planned Dev Due + configurable test window (default 6 wks) |
 | Devs | Peak devs allocated in any single sprint |
 | Sprint(s) | Sprints this epic is scheduled across |
 | POD | Jira POD field |
@@ -42,6 +42,19 @@ Epics are sorted by analysis due date (oldest first, blanks last). Paste TSV fro
 | Gap | Staffed − Min Req (red = understaffed, green = surplus) |
 
 Editing *Staffed* immediately reruns the plan — Planned Dev Due dates and sprint assignments update reactively across all tabs.
+
+### Burndown tab
+Visualises cumulative scope burn across sprints relative to the target date.
+
+| Element | Description |
+|---------|-------------|
+| Planned burndown | Solid line showing SP remaining after each sprint based on the team plan |
+| Ideal line | Dashed reference line for perfectly linear burn from total SP → 0 |
+| Target velocity line | Optional amber line — enter a uniform SP/sprint target to see where that pace lands |
+| Overflow marker | Vertical dashed line at the target date boundary; overflow sprints shown in red |
+| Schedule variance | Per-sprint table column: how many SP ahead or behind the ideal pace |
+
+Stats strip shows total scope, average SP/sprint, remaining SP at end-of-plan, and overflow sprint count.
 
 ### Other tabs
 | Tab | Description |
@@ -58,6 +71,10 @@ Editing *Staffed* immediately reruns the plan — Planned Dev Due dates and spri
 - **Target date** — planning horizon; sprint count is auto-computed as `⌈(target − start) / sprintDays⌉`
 - **Team size** and **velocity** inputs
 - **Max devs / epic** — global concurrency cap
+- **Test window** — business weeks allocated for testing after build complete (default 6)
+
+### Session persistence
+All inputs are automatically saved to `localStorage` (`sp_session_v1`) on a 400 ms debounce and restored on page refresh. This covers epics, team roster, sprint config, Jira settings, staffing overrides, story map, and all planning mode flags. The bearer token is intentionally excluded. A **Reset to defaults** button (double-confirm) in the sidebar clears the saved session and reloads to the built-in sample data.
 
 ## Stack
 
