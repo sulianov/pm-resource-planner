@@ -915,7 +915,7 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
         <div>
           <label style={labelStyle()}>Jira base URL</label>
           <input value={jiraBase} onChange={e => setJiraBase(e.target.value)}
-            placeholder="https://your-company.atlassian.net/jira"
+            placeholder="https://your-company.atlassian.net"
             style={inputStyle({ width: 280 })} />
         </div>
         <div>
@@ -934,7 +934,7 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
       <div>
         <label style={labelStyle()}>JQL query</label>
         <textarea value={jiraJql} onChange={e => setJiraJql(e.target.value)} rows={4}
-          placeholder={`project = BMO AND type in (Story,"Feature Configuration",Task) AND status in ("Analysis","Ready for Build","Build") ORDER BY cf[10002] ASC`}
+          placeholder={`project = MYPROJ AND type in (Story,Task,Bug) AND status in ("To Do","In Progress","In Review") ORDER BY cf[10002] ASC`}
           style={inputStyle({ width: "100%", resize: "vertical", lineHeight: 1.6 })} />
       </div>
 
@@ -1495,36 +1495,36 @@ function clearSession() {
 
 // ── Sample data ───────────────────────────────────────────────────────────────
 const SAMPLE_EPICS = [
-  { id: 1, name: "BMO-69546 Payment Gateway", sp: "40", analysisDue: "2026-02-01" },
-  { id: 2, name: "BMO-6498 KYC Onboarding", sp: "60", analysisDue: "2026-02-10" },
-  { id: 3, name: "BMO-71234 Trade Blotter UI", sp: "25", analysisDue: "2026-03-01" },
-  { id: 4, name: "BMO-80011 Margin Calculator", sp: "80", analysisDue: "2026-03-15" },
-  { id: 5, name: "BMO-55321 Settlement Report", sp: "35", analysisDue: "2026-04-01" },
-  { id: 6, name: "BMO-90123 Order Mgmt v2", sp: "90", analysisDue: "2026-04-20" },
-  { id: 7, name: "BMO-44567 Risk Dashboard", sp: "50", analysisDue: "2026-05-01" },
+  { id: 1, name: "PROJ-101 User Authentication", sp: "40", analysisDue: "2026-02-01" },
+  { id: 2, name: "PROJ-102 Onboarding Flow", sp: "60", analysisDue: "2026-02-10" },
+  { id: 3, name: "PROJ-103 Dashboard Redesign", sp: "25", analysisDue: "2026-03-01" },
+  { id: 4, name: "PROJ-104 Reporting Module", sp: "80", analysisDue: "2026-03-15" },
+  { id: 5, name: "PROJ-105 Notification Service", sp: "35", analysisDue: "2026-04-01" },
+  { id: 6, name: "PROJ-106 API Gateway v2", sp: "90", analysisDue: "2026-04-20" },
+  { id: 7, name: "PROJ-107 Admin Portal", sp: "50", analysisDue: "2026-05-01" },
 ];
 
 const SAMPLE_TEAM = `Name\tRole\tTeam\tDaily Velocity
-Alice Chen\tSenior Dev\tTrading\t8
-Bob Kumar\tDev\tTrading\t6
-Carol Smith\tSenior Dev\tC&S\t8
-Dave Jones\tDev\tC&S\t6
-Eve Martinez\tTech Lead\tTrading\t7
-Frank Lee\tDev\tC&S\t6
-Grace Park\tDev\tTrading\t6
-Hannah White\tSenior Dev\tC&S\t8
-Ian Brown\tDev\tTrading\t6
-James Wilson\tDev\tC&S\t6`;
+Alice Chen\tSenior Dev\tAlpha\t8
+Bob Kumar\tDev\tAlpha\t6
+Carol Smith\tSenior Dev\tBeta\t8
+Dave Jones\tDev\tBeta\t6
+Eve Martinez\tTech Lead\tAlpha\t7
+Frank Lee\tDev\tBeta\t6
+Grace Park\tDev\tAlpha\t6
+Hannah White\tSenior Dev\tBeta\t8
+Ian Brown\tDev\tAlpha\t6
+James Wilson\tDev\tBeta\t6`;
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [epicRows, setEpicRows] = useState(() => loadSession().epicRows ?? SAMPLE_EPICS);
   const [teamRaw, setTeamRaw] = useState(() => loadSession().teamRaw ?? SAMPLE_TEAM);
   const [velCol, setVelCol] = useState(() => loadSession().velCol ?? 3);
-  const [targetDate, setTargetDate] = useState(() => loadSession().targetDate ?? "2026-09-28");
+  const [targetDate, setTargetDate] = useState(() => loadSession().targetDate ?? "");
   const [sprintLengthDays, setSprintLengthDays] = useState(() => loadSession().sprintLengthDays ?? 14);
-  const [sprintStart, setSprintStart] = useState(() => loadSession().sprintStart ?? "2026-02-16");
-  const [startSprintNum, setStartSprintNum] = useState(() => loadSession().startSprintNum ?? 90);
+  const [sprintStart, setSprintStart] = useState(() => loadSession().sprintStart ?? "");
+  const [startSprintNum, setStartSprintNum] = useState(() => loadSession().startSprintNum ?? 1);
   const [activeTab, setActiveTab] = useState(() => loadSession().activeTab ?? "Epic Input");
   const [devDueMode, setDevDueMode] = useState(() => loadSession().devDueMode ?? "planned"); // "planned" | "solo"
   const [jiraBase, setJiraBase] = useState(() => loadSession().jiraBase ?? sessionStorage.getItem("sp_jiraBase") ?? "");

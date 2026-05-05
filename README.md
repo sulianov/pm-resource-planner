@@ -108,8 +108,8 @@ npm test
 Columns: **Epic Name / ID · SP · Analysis Due**
 
 ```
-BMO-1234    12    3/27/2026
-BMO-5678    5     2026-04-15
+PROJ-1234    12    3/27/2026
+PROJ-5678    5     2026-04-15
 ```
 
 Additional columns (Max Devs, Fix Version) can be included or left blank.
@@ -126,4 +126,4 @@ Bob       Dev     Canada      0.226
 
 - Holidays covered: 2025–2027 Canadian federal bank holidays
 - Epic SP always derived from story sum (epic estimate ignored)
-- Jira field IDs: Epic Link `customfield_10002`, SP `customfield_10006`, Analysis Due `customfield_10304`, Dev Due `customfield_10305`, Test Due `customfield_10306`, Product `customfield_10123`, POD `customfield_12904`
+- Jira custom field IDs (Epic Link, SP, Analysis Due, Dev Due, Test Due, Product, POD) vary per Jira instance — update the constants in `src/epicGrouping.js` to match your setup

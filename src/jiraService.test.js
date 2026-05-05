@@ -33,7 +33,7 @@ describe("fetchStoriesPaginated", () => {
     const fetch = mockFetch([{ body: { issues: [], total: 0 } }]);
     vi.stubGlobal("fetch", fetch);
 
-    await fetchStoriesPaginated({ ...CREDS, jql: "project=BMO", fields: FIELDS, onPage: () => {} });
+    await fetchStoriesPaginated({ ...CREDS, jql: "project=PROJ", fields: FIELDS, onPage: () => {} });
 
     expect(fetch).toHaveBeenCalledOnce();
     const [url, opts] = fetch.mock.calls[0];
@@ -42,12 +42,12 @@ describe("fetchStoriesPaginated", () => {
     expect(opts.headers["Authorization"]).toBe("Bearer tok-abc");
     expect(opts.headers["X-Jira-Base"]).toBe("https://jira.example.com");
     const body = JSON.parse(opts.body);
-    expect(body.jql).toBe("project=BMO");
+    expect(body.jql).toBe("project=PROJ");
     expect(body.fields).toEqual(FIELDS);
   });
 
   it("calls onPage for a single-page result", async () => {
-    const issues = [{ key: "BMO-1" }, { key: "BMO-2" }];
+    const issues = [{ key: "PROJ-1" }, { key: "PROJ-2" }];
     vi.stubGlobal("fetch", mockFetch([{ body: { issues, total: 2 } }]));
 
     const pages = [];
@@ -58,8 +58,8 @@ describe("fetchStoriesPaginated", () => {
   });
 
   it("paginates across multiple pages", async () => {
-    const page1 = [{ key: "BMO-1" }];
-    const page2 = [{ key: "BMO-2" }];
+    const page1 = [{ key: "PROJ-1" }];
+    const page2 = [{ key: "PROJ-2" }];
     vi.stubGlobal("fetch", mockFetch([
       { body: { issues: page1, total: 2 } },
       { body: { issues: page2, total: 2 } },
@@ -69,14 +69,14 @@ describe("fetchStoriesPaginated", () => {
     await fetchStoriesPaginated({ ...CREDS, jql: "", fields: [], onPage: (iss) => allIssues.push(...iss) });
 
     expect(allIssues).toHaveLength(2);
-    expect(allIssues[0].key).toBe("BMO-1");
-    expect(allIssues[1].key).toBe("BMO-2");
+    expect(allIssues[0].key).toBe("PROJ-1");
+    expect(allIssues[1].key).toBe("PROJ-2");
   });
 
   it("stops pagination when issues array is empty (guard against infinite loop)", async () => {
     // total says 5 but second page returns empty — should stop
     vi.stubGlobal("fetch", mockFetch([
-      { body: { issues: [{ key: "BMO-1" }], total: 5 } },
+      { body: { issues: [{ key: "PROJ-1" }], total: 5 } },
       { body: { issues: [],                 total: 5 } },
     ]));
 
@@ -121,11 +121,11 @@ describe("fetchStoriesPaginated", () => {
 // ════════════════════════════════════════════════════════════════════════════
 describe("fetchIssuesByKeys", () => {
   it("fetches a single chunk of up to 50 keys", async () => {
-    const issues = [{ key: "BMO-1" }, { key: "BMO-2" }];
+    const issues = [{ key: "PROJ-1" }, { key: "PROJ-2" }];
     const fetch = mockFetch([{ body: { issues } }]);
     vi.stubGlobal("fetch", fetch);
 
-    const result = await fetchIssuesByKeys({ ...CREDS, keys: ["BMO-1", "BMO-2"], fields: FIELDS });
+    const result = await fetchIssuesByKeys({ ...CREDS, keys: ["PROJ-1", "PROJ-2"], fields: FIELDS });
 
     expect(fetch).toHaveBeenCalledOnce();
     expect(result).toEqual(issues);
@@ -135,16 +135,16 @@ describe("fetchIssuesByKeys", () => {
     const fetch = mockFetch([{ body: { issues: [] } }]);
     vi.stubGlobal("fetch", fetch);
 
-    await fetchIssuesByKeys({ ...CREDS, keys: ["BMO-1", "BMO-2"], fields: [] });
+    await fetchIssuesByKeys({ ...CREDS, keys: ["PROJ-1", "PROJ-2"], fields: [] });
 
     const body = JSON.parse(fetch.mock.calls[0][1].body);
-    expect(body.jql).toContain("BMO-1");
-    expect(body.jql).toContain("BMO-2");
+    expect(body.jql).toContain("PROJ-1");
+    expect(body.jql).toContain("PROJ-2");
     expect(body.jql).toMatch(/key in/i);
   });
 
   it("splits 51 keys into two chunks of 50 and 1", async () => {
-    const keys = Array.from({ length: 51 }, (_, i) => `BMO-${i + 1}`);
+    const keys = Array.from({ length: 51 }, (_, i) => `PROJ-${i + 1}`);
     const fetch = mockFetch([
       { body: { issues: keys.slice(0, 50).map(k => ({ key: k })) } },
       { body: { issues: keys.slice(50).map(k => ({ key: k }))   } },
@@ -169,19 +169,19 @@ describe("fetchIssuesByKeys", () => {
     vi.stubGlobal("fetch", mockFetch([{ ok: false, status: 403, body: { errorMessages: ["Forbidden"] } }]));
 
     await expect(
-      fetchIssuesByKeys({ ...CREDS, keys: ["BMO-1"], fields: [] })
+      fetchIssuesByKeys({ ...CREDS, keys: ["PROJ-1"], fields: [] })
     ).rejects.toThrow("Forbidden");
   });
 
   it("concatenates results from all chunks", async () => {
-    const chunk1 = Array.from({ length: 50 }, (_, i) => ({ key: `BMO-${i}` }));
-    const chunk2 = [{ key: "BMO-50" }];
+    const chunk1 = Array.from({ length: 50 }, (_, i) => ({ key: `PROJ-${i}` }));
+    const chunk2 = [{ key: "PROJ-50" }];
     vi.stubGlobal("fetch", mockFetch([
       { body: { issues: chunk1 } },
       { body: { issues: chunk2 } },
     ]));
 
-    const keys = [...chunk1.map(i => i.key), "BMO-50"];
+    const keys = [...chunk1.map(i => i.key), "PROJ-50"];
     const result = await fetchIssuesByKeys({ ...CREDS, keys, fields: [] });
 
     expect(result).toHaveLength(51);
@@ -196,7 +196,7 @@ describe("updateIssue", () => {
     const fetch = mockFetch([{ status: 204, body: {} }]);
     vi.stubGlobal("fetch", fetch);
 
-    await updateIssue({ ...CREDS, key: "BMO-1", fields: { customfield_10305: "2026-06-01" } });
+    await updateIssue({ ...CREDS, key: "PROJ-1", fields: { customfield_10305: "2026-06-01" } });
 
     const [url, opts] = fetch.mock.calls[0];
     expect(url).toBe("http://localhost:8765/api/jira/update");
@@ -210,17 +210,17 @@ describe("updateIssue", () => {
     vi.stubGlobal("fetch", fetch);
 
     const fields = { customfield_10305: "2026-07-01" };
-    await updateIssue({ ...CREDS, key: "BMO-42", fields });
+    await updateIssue({ ...CREDS, key: "PROJ-42", fields });
 
     const body = JSON.parse(fetch.mock.calls[0][1].body);
-    expect(body.key).toBe("BMO-42");
+    expect(body.key).toBe("PROJ-42");
     expect(body.fields).toEqual(fields);
   });
 
   it("returns the HTTP status code on success", async () => {
     vi.stubGlobal("fetch", mockFetch([{ status: 204, body: {} }]));
 
-    const status = await updateIssue({ ...CREDS, key: "BMO-1", fields: {} });
+    const status = await updateIssue({ ...CREDS, key: "PROJ-1", fields: {} });
 
     expect(status).toBe(204);
   });
@@ -232,7 +232,7 @@ describe("updateIssue", () => {
     }]));
 
     await expect(
-      updateIssue({ ...CREDS, key: "BMO-1", fields: {} })
+      updateIssue({ ...CREDS, key: "PROJ-1", fields: {} })
     ).rejects.toThrow("Field validation failed");
   });
 
@@ -240,7 +240,7 @@ describe("updateIssue", () => {
     vi.stubGlobal("fetch", mockFetch([{ ok: false, status: 500, body: {} }]));
 
     await expect(
-      updateIssue({ ...CREDS, key: "BMO-1", fields: {} })
+      updateIssue({ ...CREDS, key: "PROJ-1", fields: {} })
     ).rejects.toThrow("HTTP 500");
   });
 
@@ -251,7 +251,7 @@ describe("updateIssue", () => {
     }]));
 
     await expect(
-      updateIssue({ ...CREDS, key: "BMO-1", fields: {} })
+      updateIssue({ ...CREDS, key: "PROJ-1", fields: {} })
     ).rejects.toThrow("Issue is closed");
   });
 });
