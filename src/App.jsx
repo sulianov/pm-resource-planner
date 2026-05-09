@@ -867,7 +867,7 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
         },
       });
       // Collect epic keys and fetch their SP + fixVersions from Jira
-      const epicKeys = [...new Set(allIssues.map(i => i.fields?.["customfield_10002"]).filter(Boolean))];
+      const epicKeys = [...new Set(allIssues.map(i => i.fields?.["customfield_"]).filter(Boolean))];
       const epicSpMap = {};
       const epicFixVersionMap = {};
       if (epicKeys.length) {
@@ -906,7 +906,7 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
       <div style={{ color: C.muted, fontSize: 11, lineHeight: 1.8 }}>
         Fetch stories from Jira via the local proxy on{" "}
         <span style={{ color: C.accent }}>localhost:8765</span>. Stories are grouped by epic
-        (customfield_10002). Results populate the{" "}
+        (customfield_). Results populate the{" "}
         <span style={{ color: C.accent }}>Epic Input</span> tab for planning and enable the{" "}
         <span style={{ color: C.accent }}>Write-back</span> tab for pushing dates back to Jira.
       </div>
@@ -983,11 +983,11 @@ function JiraImportTab({ jiraBase, setJiraBase, jiraToken, setJiraToken, jiraJql
 
       <div style={{ color: C.muted, fontSize: 10, lineHeight: 2, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
         <span style={{ color: C.mutedLight, letterSpacing: "0.08em" }}>FIELD MAPPING</span><br />
-        Epic link <code style={{ color: C.amber }}>customfield_10002</code> &nbsp;·&nbsp;
-        SP <code style={{ color: C.amber }}>customfield_10006</code> &nbsp;·&nbsp;
-        Analysis Due <code style={{ color: C.amber }}>customfield_10304</code> (read) &nbsp;·&nbsp;
-        Dev Due <code style={{ color: C.amber }}>customfield_10305</code> (write) &nbsp;·&nbsp;
-        Test Due <code style={{ color: C.amber }}>customfield_10306</code> (write)
+        Epic link <code style={{ color: C.amber }}>customfield_</code> &nbsp;·&nbsp;
+        SP <code style={{ color: C.amber }}>customfield_</code> &nbsp;·&nbsp;
+        Analysis Due <code style={{ color: C.amber }}>customfield_</code> (read) &nbsp;·&nbsp;
+        Dev Due <code style={{ color: C.amber }}>customfield_</code> (write) &nbsp;·&nbsp;
+        Test Due <code style={{ color: C.amber }}>customfield_</code> (write)
       </div>
     </div>
   );
