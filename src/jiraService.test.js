@@ -20,7 +20,7 @@ function mockFetch(responses) {
 }
 
 const CREDS = { base: "https://jira.example.com", token: "tok-abc" };
-const FIELDS = ["summary", "customfield_10006"];
+const FIELDS = ["summary", "customfield_"];
 
 beforeEach(() => { vi.stubGlobal("fetch", undefined); });
 afterEach(() => { vi.unstubAllGlobals(); });
@@ -196,7 +196,7 @@ describe("updateIssue", () => {
     const fetch = mockFetch([{ status: 204, body: {} }]);
     vi.stubGlobal("fetch", fetch);
 
-    await updateIssue({ ...CREDS, key: "PROJ-1", fields: { customfield_10305: "2026-06-01" } });
+    await updateIssue({ ...CREDS, key: "PROJ-1", fields: { customfield_: "2026-06-01" } });
 
     const [url, opts] = fetch.mock.calls[0];
     expect(url).toBe("http://localhost:8765/api/jira/update");
@@ -209,7 +209,7 @@ describe("updateIssue", () => {
     const fetch = mockFetch([{ status: 200, body: {} }]);
     vi.stubGlobal("fetch", fetch);
 
-    const fields = { customfield_10305: "2026-07-01" };
+    const fields = { customfield_: "2026-07-01" };
     await updateIssue({ ...CREDS, key: "PROJ-42", fields });
 
     const body = JSON.parse(fetch.mock.calls[0][1].body);

@@ -62,7 +62,7 @@ export async function fetchIssuesByKeys({ base, token, keys, fields, signal }) {
 
 /**
  * Update a Jira issue's fields via local proxy (PUT under the hood).
- * fields: { "customfield_10305": "2026-06-10", ... }
+ * fields: { "customfield_": "2026-06-10", ... }
  * Retries up to `retries` times on HTTP 429 with exponential back-off.
  */
 export async function updateIssue({ base, token, key, fields }, retries = 3) {

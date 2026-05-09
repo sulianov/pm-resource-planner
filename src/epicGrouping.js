@@ -1,13 +1,13 @@
 import { parseDate, fmtDate } from "./planning.js";
 
 // ── Jira field IDs ────────────────────────────────────────────────────────────
-export const F_EPIC_LINK    = "customfield_10002";
-export const F_SP           = "customfield_10006";
-export const F_ANALYSIS_DUE = "customfield_10304";
-export const F_DEV_DUE      = "customfield_10305";
-export const F_TEST_DUE     = "customfield_10306";
-export const F_PRODUCT      = "customfield_10123";
-export const F_POD          = "customfield_12904";
+export const F_EPIC_LINK    = "customfield_";
+export const F_SP           = "customfield_";
+export const F_ANALYSIS_DUE = "customfield_";
+export const F_DEV_DUE      = "customfield_";
+export const F_TEST_DUE     = "customfield_";
+export const F_PRODUCT      = "customfield_";
+export const F_POD          = "customfield_";
 
 export const STORY_FIELDS = [
   "summary", "status", "issuetype",
@@ -33,7 +33,7 @@ export function normalizeStory(issue) {
 }
 
 /**
- * Group raw Jira issues by epic (customfield_10002).
+ * Group raw Jira issues by epic (customfield_).
  *
  * epicSpMap (optional): { epicKey: number } — SP from the actual Jira epic issue.
  *   When provided, epic SP = max(epicSp, storySum) so a larger story sum overrides
